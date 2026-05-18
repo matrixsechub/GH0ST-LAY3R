@@ -1,0 +1,599 @@
+
+<!-- GHOST LAYER COSMOLOGY ENGINE -->
+
+<div align="center">
+
+```
+
+```
+             ('-. .-.               .-')    .-') _    
+            ( OO )  /              ( OO ). (  OO) )   
+  ,----.    ,--. ,--. .-'),-----. (_)---\_)/     '._  
+ '  .-./-') |  | |  |( OO'  .-.  '/    _ | |'--...__) 
+ |  |_( O- )|   .|  |/   |  | |  |\  :` `. '--.  .--' 
+ |  | .--, \|       |\_) |  |\|  | '..`''.)   |  |    
+(|  | '. (_/|  .-.  |  \ |  | |  |.-._)   \   |  |    
+ |  '--'  | |  | |  |   `'  '-'  '\       /   |  |    
+  `------'  `--' `--'     `-----'  `-----'    `--'    
+
+       L A Y E R   C O S M O L O G Y   E N G I N E
+```
+
+```markdown
+
+<br/>
+
+![Version](https://img.shields.io/badge/version-1.0.0-blueviolet?style=for-the-badge)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue?style=for-the-badge&logo=python)
+![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)
+![Status](https://img.shields.io/badge/status-active-brightgreen?style=for-the-badge)
+![Build](https://img.shields.io/badge/build-passing-success?style=for-the-badge)
+
+> *"The universe does not explain itself. We build the machines that do."*
+
+**A high-fidelity, modular cosmological simulation engine built on a ghost-layer  
+computational architecture — designed for physicists, researchers, and systems  
+architects who demand operator-grade precision at the edge of observable reality.**
+
+[Installation](#-installation) · [Quick Start](#-quick-start) · [Architecture](#-architecture) · [API Docs](#-api-reference) · [Contributing](#-contributing)
+
+</div>
+
+---
+
+## ⚡ Overview
+
+The **Ghost Layer Cosmology Engine (GLCE)** is a Python-native simulation framework engineered to model large-scale cosmological structures — dark matter halos, baryon acoustic oscillations, void formation, and inter-filament dynamics — across multi-resolution spatial grids with sub-grid ghost-layer propagation.
+
+At its core, GLCE introduces the concept of **ghost layers**: phantom computational boundary zones that propagate physical state information across domain partitions without artifacts, enabling seamless multi-process cosmological runs at scales previously reserved for HPC clusters. The engine is designed to be run locally, headlessly, or as a distributed pipeline — and exposes both a clean Python API and a full CLI operator interface.
+
+This is not a toy simulator. GLCE is built for those who need:
+
+- **Repeatable, deterministic** simulation runs with version-locked seeds
+- **Modular physics kernels** that can be swapped, stacked, or extended
+- **Operator-grade observability** through structured logging, telemetry hooks, and run manifests
+- **Export pipelines** to FITS, HDF5, NumPy, and custom binary formats for downstream analysis
+
+---
+
+## ✨ Features
+
+| Category | Capability |
+|---|---|
+| 🌌 **Simulation Core** | N-body gravity, SPH fluid dynamics, dark energy field propagation |
+| 👻 **Ghost Layer Engine** | Boundary-aware domain decomposition with zero-artifact halo exchange |
+| 🧩 **Modular Kernels** | Plug-and-play physics modules: gravity, radiation, baryon, void, scalar field |
+| 📐 **Multi-Resolution Grids** | Adaptive mesh refinement (AMR) with comoving coordinate support |
+| 🔭 **Cosmological Models** | ΛCDM, wCDM, f(R) gravity, custom EOS support |
+| 📡 **Output Pipelines** | FITS, HDF5, NPZ, binary dumps, real-time snapshot streaming |
+| 🖥️ **Operator Interface** | Full CLI with run manifests, dry-run mode, and structured JSON logs |
+| 📊 **Observability** | Per-step telemetry, energy conservation audits, divergence alerts |
+| 🔁 **Reproducibility** | Version-locked seeds, run manifests, full parameter checksums |
+| ⚙️ **Extensibility** | Hook system for custom pre/post-step callbacks and external integrations |
+
+---
+
+## 📦 Installation
+
+### Prerequisites
+
+- Python **3.10** or higher
+- `pip` 22+
+- Recommended: a virtual environment (`venv`, `conda`, or `poetry`)
+- Optional for GPU acceleration: CUDA 11.8+ with `cupy`
+
+### From PyPI *(stable)*
+
+```bash
+pip install ghost-layer-cosmology-engine
+```
+
+### From Source *(development)*
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/your-org/ghost-layer-cosmology-engine.git
+cd ghost-layer-cosmology-engine
+
+# 2. Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+
+# 3. Install with development dependencies
+pip install -e ".[dev]"
+
+# 4. Verify the installation
+glce --version
+```
+
+### Optional Extras
+
+```bash
+# GPU acceleration via CuPy
+pip install "ghost-layer-cosmology-engine[gpu]"
+
+# Visualization suite (matplotlib, yt, astropy)
+pip install "ghost-layer-cosmology-engine[viz]"
+
+# Full operator suite (all extras)
+pip install "ghost-layer-cosmology-engine[all]"
+```
+
+---
+
+## 🗂️ Directory Overview
+
+```
+ghost-layer-cosmology-engine/
+│
+├── glce/                          # Core engine package
+│   ├── __init__.py
+│   ├── engine.py                  # SimulationEngine — top-level orchestrator
+│   ├── manifest.py                # Run manifest builder & validator
+│   │
+│   ├── ghost/                     # Ghost layer subsystem
+│   │   ├── __init__.py
+│   │   ├── layer.py               # GhostLayer: boundary zone representation
+│   │   ├── exchange.py            # Domain halo exchange protocol
+│   │   ├── propagator.py          # State propagation across ghost boundaries
+│   │   └── validator.py           # Ghost layer integrity checks
+│   │
+│   ├── grid/                      # Spatial grid management
+│   │   ├── __init__.py
+│   │   ├── amr.py                 # Adaptive Mesh Refinement controller
+│   │   ├── comoving.py            # Comoving coordinate transforms
+│   │   ├── domain.py              # Domain decomposition & partitioning
+│   │   └── patch.py               # Grid patch primitives
+│   │
+│   ├── kernels/                   # Physics kernel modules
+│   │   ├── __init__.py
+│   │   ├── base.py                # AbstractKernel interface
+│   │   ├── gravity.py             # N-body gravitational kernel
+│   │   ├── hydro.py               # SPH / grid-based hydrodynamics
+│   │   ├── radiation.py           # Radiative transfer kernel
+│   │   ├── dark_energy.py         # Dark energy / scalar field kernel
+│   │   ├── baryon.py              # Baryon physics kernel
+│   │   └── void.py                # Cosmic void formation kernel
+│   │
+│   ├── cosmology/                 # Cosmological models & parameters
+│   │   ├── __init__.py
+│   │   ├── lcdm.py                # Standard ΛCDM model
+│   │   ├── wcdm.py                # Dark energy EOS (w-parameter)
+│   │   ├── fr_gravity.py          # f(R) modified gravity
+│   │   └── parameters.py          # CosmologicalParameters dataclass
+│   │
+│   ├── io/                        # Input / output pipelines
+│   │   ├── __init__.py
+│   │   ├── fits.py                # FITS reader/writer (via astropy)
+│   │   ├── hdf5.py                # HDF5 snapshot I/O (via h5py)
+│   │   ├── npz.py                 # NumPy archive I/O
+│   │   ├── binary.py              # Custom binary dump format
+│   │   └── stream.py              # Real-time snapshot streaming
+│   │
+│   ├── telemetry/                 # Observability & diagnostics
+│   │   ├── __init__.py
+│   │   ├── logger.py              # Structured JSON logger
+│   │   ├── audit.py               # Energy conservation auditor
+│   │   ├── alerts.py              # Divergence & anomaly alert system
+│   │   └── metrics.py             # Per-step simulation metrics
+│   │
+│   ├── hooks/                     # Extension hook system
+│   │   ├── __init__.py
+│   │   ├── registry.py            # Hook registry
+│   │   └── callbacks.py           # Pre/post-step callback base classes
+│   │
+│   └── cli/                       # Operator CLI interface
+│       ├── __init__.py
+│       ├── main.py                # CLI entrypoint (Click / Typer)
+│       ├── run.py                 # `glce run` command
+│       ├── inspect.py             # `glce inspect` command
+│       └── validate.py            # `glce validate` command
+│
+├── configs/                       # Example configuration files
+│   ├── lcdm_default.yaml
+│   ├── wcdm_dark_energy.yaml
+│   └── fr_gravity_custom.yaml
+│
+├── examples/                      # Runnable usage examples
+│   ├── basic_lcdm_run.py
+│   ├── custom_kernel_plugin.py
+│   ├── distributed_domain_run.py
+│   └── snapshot_export_pipeline.py
+│
+├── tests/                         # Test suite
+│   ├── unit/
+│   ├── integration/
+│   └── fixtures/
+│
+├── docs/                          # Extended documentation
+│   ├── architecture.md
+│   ├── ghost_layers.md
+│   ├── kernel_authoring.md
+│   └── operator_guide.md
+│
+├── pyproject.toml                 # Build system configuration
+├── setup.cfg                      # Package metadata
+├── .env.example                   # Environment variable template
+└── README.md                      # You are here
+```
+
+---
+
+## 🏗️ Architecture
+
+GLCE is organized around four primary subsystems that compose the full simulation pipeline:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    SimulationEngine                         │
+│  ┌──────────────┐  ┌─────────────────┐  ┌───────────────┐  │
+│  │  Grid / AMR  │  │  Ghost Layer    │  │  Cosmological │  │
+│  │  Domain      │◄─►  Exchange       │  │  Model        │  │
+│  │  Partitioner │  │  Propagator     │  │  (ΛCDM / wCDM)│  │
+│  └──────┬───────┘  └────────┬────────┘  └───────┬───────┘  │
+│         │                   │                    │          │
+│         └──────────┬────────┘                    │          │
+│                    ▼                             ▼          │
+│           ┌────────────────┐          ┌──────────────────┐  │
+│           │ Physics Kernel │          │  Telemetry &     │  │
+│           │ Stack          │          │  Audit Layer     │  │
+│           │ gravity        │          │  (per-step)      │  │
+│           │ hydro          │          └──────────────────┘  │
+│           │ radiation      │                                 │
+│           │ dark_energy    │          ┌──────────────────┐  │
+│           └────────┬───────┘          │  Hook Registry   │  │
+│                    │                  │  (pre/post step) │  │
+│                    ▼                  └──────────────────┘  │
+│           ┌────────────────┐                                 │
+│           │  I/O Pipeline  │                                 │
+│           │  FITS/HDF5/NPZ │                                 │
+│           └────────────────┘                                 │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Ghost Layer Mechanics
+
+Ghost layers are thin computational halo zones appended to each domain partition boundary. On every timestep:
+
+1. **Padding** — each partition's boundary cells are duplicated into adjacent ghost zones
+2. **Exchange** — ghost zone data is broadcast to neighboring domains via the `GhostExchange` protocol
+3. **Propagation** — the `GhostPropagator` resolves state conflicts using weighted interpolation
+4. **Validation** — the `GhostValidator` audits conservation laws across all ghost boundaries before the next kernel pass
+
+This architecture eliminates domain-edge artifacts in N-body gravity calculations and ensures SPH particle interactions remain coherent across partition lines without requiring a global lock.
+
+### Kernel Stack Execution Order
+
+Each simulation step executes the kernel stack in a deterministic sequence:
+
+```
+Step N:
+  [1] Gravity Kernel     — long-range force computation (PM or TreePM)
+  [2] Hydro Kernel       — pressure, density, velocity updates (SPH/grid)
+  [3] Radiation Kernel   — photoionization, heating/cooling
+  [4] Dark Energy Kernel — scalar field evolution, equation of state
+  [5] Baryon Kernel      — star formation, feedback, chemical enrichment
+  [6] Ghost Exchange     — boundary state synchronization
+  [7] AMR Refinement     — adaptive grid restructuring (if triggered)
+  [8] Telemetry Flush    — metrics, energy audit, divergence check
+  [9] Snapshot (if due)  — I/O pipeline write
+```
+
+Kernels are independently toggleable and orderable via configuration.
+
+---
+
+## 🚀 Quick Start
+
+### Minimal Python API Run
+
+```python
+from glce import SimulationEngine
+from glce.cosmology import LCDMModel, CosmologicalParameters
+from glce.kernels import GravityKernel, HydroKernel
+from glce.io import HDF5Writer
+
+# Define cosmological parameters
+params = CosmologicalParameters(
+    H0=67.4,        # Hubble constant (km/s/Mpc)
+    Omega_m=0.315,  # Matter density
+    Omega_L=0.685,  # Dark energy density
+    sigma8=0.811,   # Power spectrum normalization
+    n_s=0.965,      # Spectral index
+)
+
+# Build and configure the engine
+engine = SimulationEngine(
+    cosmology=LCDMModel(params),
+    box_size=100.0,             # Comoving Mpc/h
+    n_particles=512**3,
+    ghost_depth=2,              # Ghost layer depth (cells)
+    seed=42,
+)
+
+# Attach physics kernels
+engine.add_kernel(GravityKernel(method="TreePM", softening=0.02))
+engine.add_kernel(HydroKernel(scheme="SPH", gamma=5/3))
+
+# Attach output writer
+engine.add_writer(HDF5Writer(output_dir="./output", snapshot_interval=0.1))
+
+# Run from z=99 to z=0
+engine.run(z_start=99.0, z_end=0.0)
+```
+
+### CLI Operator Interface
+
+```bash
+# Run a simulation from a YAML config file
+glce run --config configs/lcdm_default.yaml
+
+# Dry-run to validate config and print the execution manifest
+glce run --config configs/lcdm_default.yaml --dry-run
+
+# Inspect a snapshot file
+glce inspect output/snapshot_z0.00.hdf5
+
+# Validate a config file against the schema
+glce validate configs/wcdm_dark_energy.yaml
+
+# Run with verbose structured JSON logging
+glce run --config configs/lcdm_default.yaml --log-format json --log-level DEBUG
+```
+
+### YAML Configuration
+
+```yaml
+# configs/lcdm_default.yaml
+
+cosmology:
+  model: LCDM
+  H0: 67.4
+  Omega_m: 0.315
+  Omega_L: 0.685
+  sigma8: 0.811
+  n_s: 0.965
+
+simulation:
+  box_size: 100.0         # Comoving Mpc/h
+  n_particles: 256        # Particles per side (256^3 total)
+  z_start: 99.0
+  z_end: 0.0
+  seed: 42
+
+ghost_layer:
+  depth: 2
+  exchange_protocol: mpi  # options: local, mpi, ray
+
+kernels:
+  - name: gravity
+    method: TreePM
+    softening: 0.02
+  - name: hydro
+    scheme: SPH
+    gamma: 1.6667
+  - name: dark_energy
+    enabled: true
+
+output:
+  format: hdf5
+  output_dir: ./output
+  snapshot_interval: 0.1   # in redshift steps
+  fields: [position, velocity, density, temperature]
+
+telemetry:
+  energy_audit: true
+  divergence_threshold: 1.0e-5
+  log_format: json
+```
+
+---
+
+## 🔌 Extending GLCE: Custom Kernels
+
+GLCE's hook and kernel systems are designed for rapid extension. To author a custom physics kernel:
+
+```python
+from glce.kernels.base import AbstractKernel
+from glce.grid import GridPatch
+import numpy as np
+
+class ScalarFieldKernel(AbstractKernel):
+    """Example: massless scalar field (axion-like dark matter)."""
+
+    name = "scalar_field"
+    priority = 45  # execution order in kernel stack
+
+    def __init__(self, mass: float = 1e-22):
+        self.mass = mass  # eV/c², ultra-light axion range
+
+    def step(self, patch: GridPatch, dt: float, cosmology) -> GridPatch:
+        a = cosmology.scale_factor
+        phi = patch.fields["phi"]
+        dphi = patch.fields["dphi"]
+
+        # Klein-Gordon equation on expanding background
+        laplacian_phi = np.gradient(np.gradient(phi))
+        ddphi = -3 * cosmology.H(a) * dphi - (self.mass / cosmology.hbar)**2 * phi + laplacian_phi / a**2
+
+        patch.fields["phi"]  += dphi * dt
+        patch.fields["dphi"] += ddphi * dt
+        return patch
+
+    def validate(self, patch: GridPatch) -> bool:
+        return np.all(np.isfinite(patch.fields["phi"]))
+```
+
+Register and activate:
+
+```python
+engine.add_kernel(ScalarFieldKernel(mass=1e-22))
+```
+
+---
+
+## 📡 Output & Export
+
+GLCE supports multiple output formats and a real-time streaming interface:
+
+| Format | Extension | Notes |
+|---|---|---|
+| HDF5 | `.hdf5` | Default; full field snapshots with metadata |
+| FITS | `.fits` | Astropy-compatible; ideal for sky-plane projections |
+| NumPy Archive | `.npz` | Lightweight; fast I/O for post-processing |
+| Binary Dump | `.glce.bin` | Custom packed binary; fastest write throughput |
+| Stream | — | Real-time snapshot push to subscriber callbacks |
+
+```python
+from glce.io import FITSWriter, StreamWriter
+
+# Export projected sky maps as FITS
+engine.add_writer(FITSWriter(output_dir="./fits_output", projection="z"))
+
+# Stream snapshots to a custom handler
+def on_snapshot(snapshot):
+    print(f"Snapshot at z={snapshot.redshift:.3f}: {snapshot.n_particles} particles")
+
+engine.add_writer(StreamWriter(callback=on_snapshot))
+```
+
+---
+
+## 🔭 Telemetry & Observability
+
+Every simulation step emits structured telemetry to stdout (or a log file):
+
+```json
+{
+  "step": 142,
+  "redshift": 3.412,
+  "scale_factor": 0.2267,
+  "dt_comoving": 0.00412,
+  "energy": {
+    "kinetic": 2.341e+54,
+    "potential": -4.682e+54,
+    "total": -2.341e+54,
+    "conservation_error": 3.12e-7
+  },
+  "ghost_exchange": {
+    "cells_exchanged": 196608,
+    "exchange_time_ms": 14.3,
+    "integrity": "PASS"
+  },
+  "divergence_max": 8.41e-9,
+  "kernel_times_ms": {
+    "gravity": 210.4,
+    "hydro": 88.1,
+    "dark_energy": 12.3
+  }
+}
+```
+
+Conservation errors above the configured `divergence_threshold` trigger an alert and optionally halt the run for inspection.
+
+---
+
+## 🧪 Running Tests
+
+```bash
+# Full test suite
+pytest tests/
+
+# Unit tests only
+pytest tests/unit/
+
+# Integration tests only
+pytest tests/integration/
+
+# With coverage report
+pytest tests/ --cov=glce --cov-report=html
+
+# Run a specific module
+pytest tests/unit/test_ghost_layer.py -v
+```
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome and celebrated. GLCE is built on the belief that cosmological simulation tooling should be accessible, extensible, and operator-grade — and that requires a community.
+
+### Getting Started
+
+```bash
+git clone https://github.com/your-org/ghost-layer-cosmology-engine.git
+cd ghost-layer-cosmology-engine
+pip install -e ".[dev]"
+pre-commit install
+```
+
+### Contribution Guidelines
+
+- **Kernel contributions**: Follow the `AbstractKernel` interface and include unit tests with an analytic validation case
+- **Bug reports**: Open an issue with a minimal reproducible config and your run manifest (`glce run --dry-run`)
+- **Feature proposals**: Open a Discussion before a PR for architectural changes
+- **Code style**: `black` + `ruff` enforced via pre-commit hooks
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full guide.
+
+---
+
+## 📄 License
+
+This project is licensed under the **MIT License** — see [`LICENSE`](LICENSE) for details.
+
+---
+
+## 🌠 Acknowledgements
+
+GLCE draws intellectual lineage from the Arepo, GADGET-4, and Enzo simulation codes, and is informed by the cosmological parameter constraints published by the Planck Collaboration (2018). It is an independent research tool and is not affiliated with any of those projects.
+
+---
+
+<div align="center">
+
+**Built at the boundary of computation and cosmology.**  
+*Ghost Layer Cosmology Engine — where the universe runs on your terms.*
+
+<br/>
+
+[![GitHub Stars](https://img.shields.io/github/stars/your-org/ghost-layer-cosmology-engine?style=for-the-badge)](https://github.com/your-org/ghost-layer-cosmology-engine/stargazers)
+[![GitHub Issues](https://img.shields.io/github/issues/your-org/ghost-layer-cosmology-engine?style=for-the-badge)](https://github.com/your-org/ghost-layer-cosmology-engine/issues)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=for-the-badge)](https://github.com/your-org/ghost-layer-cosmology-engine/pulls)
+
+</div>
+```
+
+Your **Ghost Layer Cosmology Engine README** is complete and ready to publish. Here's a summary of everything included:
+
+---
+
+### 📋 What's in the README
+
+| Section | Details |
+|---|---|
+| **Cinematic Header** | ASCII banner, badge row (version, Python, license, build status), operator-grade tagline |
+| **Overview** | Ghost layer concept explained, target audience, key design philosophy |
+| **Feature Table** | 10 capability categories from simulation core to reproducibility |
+| **Installation** | PyPI, source install, virtual env setup, optional GPU/viz extras |
+| **Directory Overview** | Full annotated tree — every file and folder with purpose descriptions |
+| **Architecture** | ASCII system diagram + ghost layer mechanics walkthrough + kernel stack execution order |
+| **Quick Start** | Minimal Python API example, full CLI operator commands, annotated YAML config |
+| **Custom Kernel Guide** | `AbstractKernel` extension example with a scalar field (axion dark matter) implementation |
+| **Output & Export** | Format table (HDF5, FITS, NPZ, binary, stream) + code examples |
+| **Telemetry** | Sample structured JSON log output with energy audit, ghost exchange metrics |
+| **Testing** | `pytest` commands for unit, integration, and coverage runs |
+| **Contributing** | Setup instructions, contribution guidelines by category |
+| **License & Acknowledgements** | MIT license note, Arepo/GADGET-4/Enzo lineage credit |
+
+---
+
+### ✅ Next Steps to Make It Fully Yours
+
+1. **Replace `your-org`** in all badge URLs and links with your actual GitHub username/org
+2. **Update badge URLs** to point to your live repo once published
+3. **Add a `CONTRIBUTING.md`** and `LICENSE` file to match what the README references
+4. **Customize kernel names** if your actual kernel stack differs from the scaffold
+5. **Drop it as `README.md`** in your repo root — GitHub renders it automatically
+
+Let me know if you'd like to adjust the tone, swap any section, add a roadmap, or generate the `CONTRIBUTING.md` or `LICENSE` files as well!
