@@ -47,13 +47,17 @@ GH0ST-LAY3R/
 │   ├── physics.py        # DefaultDominionPhysics: mutates SubstrateState based on intent tags
 │   ├── engine.py         # GhostLayerEngine + create_default_engine(): main orchestrator
 │   ├── oversoul.py       # Oversoul / DefaultOversoul: fuses agent outputs, does bounded recursion
-│   └── output.py         # OutputReactor / OutputEnvelope: final output shaping
+│   ├── output.py         # OutputReactor / OutputEnvelope: final output shaping
+│   └── registry.py       # Agent HQ registry schema (dataclasses only, no I/O) — see AGENT_HQ.md
 ├── agents/
-│   └── constellation.py  # Agent protocol, AgentConstellation registry, 4 example agents
+│   ├── constellation.py  # Agent protocol, AgentConstellation registry, 4 example agents
+│   └── registry.yaml     # Hand-maintained Agent HQ registry data (real agents/engine only)
 ├── scripts/
 │   └── run_demo.py       # CLI-style entrypoint that boots the engine and prints JSON output
 ├── IMAGES/                # Diagram/banner assets referenced by README.md
 ├── README.md              # Aspirational "Ghost Layer Cosmology Engine" pitch (see gap note above)
+├── AGENT_HQ.md            # Agent HQ protocol + routing model (design spec, not implemented)
+├── API_CONTRACT.md        # Draft REST contract for the future MSHOPS.NET backend (spec only)
 ├── ABOUT.txt, GHOST_LAYER.txt, RELEASE_ANNOUNCEMENT.txt  # Narrative/marketing text
 ├── REPO_STRUCTURE_COMPLETE.txt  # Aspirational TS/Vercel scaffold description (not implemented)
 └── LICENSE.txt            # MIT, Copyright Guadalupe Gallegos (MatrixSecHub)
@@ -124,7 +128,8 @@ this interface does. `RouteAdvisoryAgent` (in `agents/constellation.py`) is
 a minimal worked example: it always activates and returns a generic
 `suggested_lane` string based on intent tags/volatility, without performing
 any real routing or referencing any real subsystem — demonstrating the
-pattern without building ahead of need.
+pattern without building ahead of need. This extension point is formalized
+into a registry and protocol in "Agent HQ design spec" below.
 
 ## Running things
 
@@ -163,6 +168,40 @@ tests, there's no existing convention to follow — pick something standard
 - No error handling for things that "can't happen"; the one deliberate
   try/except is in `AgentConstellation.run_all`, which isolates a failing
   agent so one bad agent doesn't kill the whole run.
+
+## Agent HQ design spec (for MSHOPS.NET)
+
+This repo is also the design source of truth for **Agent HQ** — the
+registry, protocol, and routing model that a future external system,
+MSHOPS.NET, will run in production. This section is a summary; the actual
+specs live in dedicated files so this document stays scannable:
+
+- **`core/registry.py`** — the registry schema (plain dataclasses:
+  `EngineBinding`, `AgentRegistryEntry`; no logic, no I/O).
+- **`agents/registry.yaml`** — the registry populated with what actually
+  exists today: one engine (`ghost-layer-core`) and its four agents.
+  Hand-maintained; nothing in this repo parses it.
+- **`AGENT_HQ.md`** — the full protocol: how agents register, how engines
+  declare capabilities, and the routing model (lanes, modes, statuses).
+- **`API_CONTRACT.md`** — a draft REST contract for the future MSHOPS.NET
+  backend (`POST /intents`, `GET /agents`, etc.).
+
+**None of this is wired into the running engine.** `create_default_engine()`
+in `core/engine.py` is unchanged and remains the only real runtime path in
+this repo. The registry/protocol/API docs are parallel design artifacts
+describing a system that does not exist yet — do not wire them into the
+engine unless explicitly asked; that would conflate "documented plan" with
+"shipped behavior," which is exactly the gap this file exists to prevent
+(see "What this repo actually is" above).
+
+**Ingestion order for anyone building MSHOPS.NET:** read this file first
+(it's canonical, per the banner at the top), then `AGENT_HQ.md` and
+`API_CONTRACT.md`, before writing any MSHOPS.NET-side code — which belongs
+in a different repo/service, not here.
+
+No lore or mythology has been introduced in this section or its linked
+docs; it is written entirely in the technical register, consistent with
+this file's canonical status.
 
 ## Working in this repo
 

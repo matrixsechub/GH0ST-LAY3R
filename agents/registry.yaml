@@ -1,0 +1,77 @@
+# Agent HQ registry
+#
+# Describes the agents and engines that actually exist in this repo today.
+# Schema: core/registry.py (EngineBinding, AgentRegistryEntry). Protocol and
+# routing model: AGENT_HQ.md. Hand-maintained — nothing in this repo parses
+# or enforces this file at runtime. It is the data source a future
+# MSHOPS.NET registry service would import.
+
+schema_version: 1
+
+engines:
+  - id: ghost-layer-core
+    status: active
+    description: >
+      The Python engine in this repo (core/ + agents/): substrate ->
+      dominion -> constellation -> oversoul -> reactor. The only engine
+      that actually exists and runs today.
+    entrypoint: core.engine.create_default_engine
+
+agents:
+  - id: adversarial-intel-agent
+    name: AdversarialIntelAgent
+    module_path: agents.constellation.AdversarialIntelAgent
+    engine: ghost-layer-core
+    mode: conditional
+    status: active
+    tags: [security, volatility]
+    description: >
+      Flags elevated/moderate threat level based on substrate volatility.
+    produces:
+      threat_level: str
+      spectral_density: float
+      volatility: float
+
+  - id: containment-agent
+    name: ContainmentAgent
+    module_path: agents.constellation.ContainmentAgent
+    engine: ghost-layer-core
+    mode: conditional
+    status: active
+    tags: [security, containment]
+    description: >
+      Activates on high volatility or escalation tags; recommends a
+      volatility clamp.
+    produces:
+      containment_action: str
+      volatility_before: float
+      recommended_clamp: float
+
+  - id: operator-doctrine-agent
+    name: OperatorDoctrineAgent
+    module_path: agents.constellation.OperatorDoctrineAgent
+    engine: ghost-layer-core
+    mode: always-on
+    status: active
+    tags: [doctrine]
+    description: >
+      Always active; echoes operator doctrine and intent tags.
+    produces:
+      doctrine: str
+      intent_tags: list
+      spectral_density: float
+
+  - id: route-advisory-agent
+    name: RouteAdvisoryAgent
+    module_path: agents.constellation.RouteAdvisoryAgent
+    engine: ghost-layer-core
+    mode: always-on
+    status: active
+    tags: [routing, advisory]
+    description: >
+      Always active; suggests a generic routing lane based on tag/volatility
+      heuristics. Advisory only — performs no real routing.
+    produces:
+      suggested_lane: str
+      confidence: str
+      basis: dict
