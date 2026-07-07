@@ -2,6 +2,16 @@
 
 Guidance for Claude Code (and other AI assistants) working in this repository.
 
+**Status: canonical.** This file is the authoritative technical reference
+for this repo. Any AI assistant (Claude Code or otherwise) must read it
+before planning or writing code here. Where it conflicts with `README.md`,
+`ABOUT.txt`, `GHOST_LAYER.txt`, `RELEASE_ANNOUNCEMENT.txt`, or
+`REPO_STRUCTURE_COMPLETE.txt` on anything code-related — architecture,
+what exists, how to run it — this file wins; those are narrative/marketing
+text, not specs (see below). This file does not extend to or ratify the
+mythic "Ghost Layer Cosmology" content of those docs; it documents only the
+real Python engine and how to work on it.
+
 ## What this repo actually is
 
 GH0ST-LAY3R ("Ghost Layer Studio") is a **small, single-file-per-concern Python
