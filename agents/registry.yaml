@@ -1,22 +1,31 @@
-# Agent HQ registry
+# Agent HQ registry (schema v2)
 #
 # Describes the agents, engines, and the HITL operator that actually exist
 # in this repo today. Schema: core/registry.py (EngineBinding,
-# AgentRegistryEntry, OperatorEntry). Protocol, routing model, and HITL
-# Governance Layer: AGENT_HQ.md. Hand-maintained — nothing in this repo
-# parses or enforces this file at runtime. It is the data source a future
-# MSHOPS.NET registry service would import.
+# AgentRegistryEntry, OperatorEntry, EscalationEvent). Protocol, routing
+# model, HITL Governance Layer, and Escalation Lifecycle: AGENT_HQ.md.
+# Hand-maintained — nothing in this repo parses or enforces this file at
+# runtime. It is the data source a future MSHOPS.NET registry service
+# would import.
+#
+# v2 adds `type` discriminators and `capabilities` to engines/agents
+# (previously operator-only) and the EscalationEvent schema in
+# core/registry.py. No escalation *data* lives here — escalations are
+# runtime events, not hand-maintained registry entries; see AGENT_HQ.md's
+# "Escalation Lifecycle" for an illustrative (non-real) example.
 
-schema_version: 1
+schema_version: 2
 
 engines:
-  - id: ghost-layer-core
+  - type: engine
+    id: ghost-layer-core
     status: active
     description: >
       The Python engine in this repo (core/ + agents/): substrate ->
       dominion -> constellation -> oversoul -> reactor. The only engine
       that actually exists and runs today.
     entrypoint: core.engine.create_default_engine
+    capabilities: [substrate-ingestion, dominion-physics, agent-constellation, oversoul-fusion, output-reactor]
 
 operators:
   - type: operator
@@ -29,13 +38,15 @@ operators:
     binding: HQ-level
 
 agents:
-  - id: adversarial-intel-agent
+  - type: agent
+    id: adversarial-intel-agent
     name: AdversarialIntelAgent
     module_path: agents.constellation.AdversarialIntelAgent
     engine: ghost-layer-core
     mode: conditional
     status: active
     tags: [security, volatility]
+    capabilities: [threat-detection]
     description: >
       Flags elevated/moderate threat level based on substrate volatility.
     produces:
@@ -43,13 +54,15 @@ agents:
       spectral_density: float
       volatility: float
 
-  - id: containment-agent
+  - type: agent
+    id: containment-agent
     name: ContainmentAgent
     module_path: agents.constellation.ContainmentAgent
     engine: ghost-layer-core
     mode: conditional
     status: active
     tags: [security, containment]
+    capabilities: [containment-action, volatility-clamp]
     description: >
       Activates on high volatility or escalation tags; recommends a
       volatility clamp.
@@ -58,13 +71,15 @@ agents:
       volatility_before: float
       recommended_clamp: float
 
-  - id: operator-doctrine-agent
+  - type: agent
+    id: operator-doctrine-agent
     name: OperatorDoctrineAgent
     module_path: agents.constellation.OperatorDoctrineAgent
     engine: ghost-layer-core
     mode: always-on
     status: active
     tags: [doctrine]
+    capabilities: [doctrine-echo]
     description: >
       Always active; echoes operator doctrine and intent tags.
     produces:
@@ -72,13 +87,15 @@ agents:
       intent_tags: list
       spectral_density: float
 
-  - id: route-advisory-agent
+  - type: agent
+    id: route-advisory-agent
     name: RouteAdvisoryAgent
     module_path: agents.constellation.RouteAdvisoryAgent
     engine: ghost-layer-core
     mode: always-on
     status: active
     tags: [routing, advisory]
+    capabilities: [lane-suggestion]
     description: >
       Always active; suggests a generic routing lane based on tag/volatility
       heuristics. Advisory only — performs no real routing.

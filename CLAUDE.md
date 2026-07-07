@@ -176,17 +176,24 @@ registry, protocol, and routing model that a future external system,
 MSHOPS.NET, will run in production. This section is a summary; the actual
 specs live in dedicated files so this document stays scannable:
 
-- **`core/registry.py`** — the registry schema (plain dataclasses:
-  `EngineBinding`, `AgentRegistryEntry`, `OperatorEntry`; no logic, no I/O).
-- **`agents/registry.yaml`** — the registry populated with what actually
-  exists today: one engine (`ghost-layer-core`), its four agents, and one
-  HITL operator entry (`operators:`). Hand-maintained; nothing in this
-  repo parses it.
+- **`core/registry.py`** (schema v2) — the registry schema: `EngineBinding`,
+  `AgentRegistryEntry`, `OperatorEntry`, `EscalationEvent`, and a
+  `RegistryRecord` union type; no logic, no I/O. Every record type carries
+  a `type` discriminator (`"engine"`/`"agent"`/`"operator"`/`"escalation"`).
+- **`agents/registry.yaml`** (schema v2) — the registry populated with what
+  actually exists today: one engine (`ghost-layer-core`, with real
+  `capabilities`), its four agents (each with real `capabilities`), and
+  one HITL operator entry (`operators:`). No `escalations:` list — those
+  are runtime events, not hand-maintained data. Hand-maintained; nothing
+  in this repo parses it.
 - **`AGENT_HQ.md`** — the full protocol: how agents register, how engines
-  declare capabilities, the routing model (lanes, modes, statuses), and
-  the HITL Governance Layer (see below).
-- **`API_CONTRACT.md`** — a draft REST contract for the future MSHOPS.NET
-  backend (`POST /intents`, `GET /agents`, etc.).
+  declare capabilities, the routing model (lanes, modes, statuses), the
+  HITL Governance Layer (see below), the Escalation Lifecycle, and a
+  schema-versioning changelog.
+- **`API_CONTRACT.md`** (draft v1) — a draft REST contract for the future
+  MSHOPS.NET backend: intents, agents, engines, operators, and escalations
+  (`POST /intents`, `GET /agents`, `GET /operators`, `POST /escalations`,
+  `PATCH /escalations/:id`, etc.).
 
 **None of this is wired into the running engine.** `create_default_engine()`
 in `core/engine.py` is unchanged and remains the only real runtime path in
@@ -196,9 +203,16 @@ engine unless explicitly asked; that would conflate "documented plan" with
 "shipped behavior," which is exactly the gap this file exists to prevent
 (see "What this repo actually is" above).
 
-**Ingestion order for anyone building MSHOPS.NET:** read this file first
-(it's canonical, per the banner at the top), then `AGENT_HQ.md` and
-`API_CONTRACT.md`, before writing any MSHOPS.NET-side code — which belongs
+**Canonical ingestion order for anyone doing Agent HQ / MSHOPS.NET work:**
+
+1. `CLAUDE.md` (this file) — canonical; wins on any conflict.
+2. `AGENT_HQ.md` — protocol, routing model, HITL Governance Layer,
+   Escalation Lifecycle.
+3. `API_CONTRACT.md` — draft REST contract built on the above.
+4. `core/registry.py` — the typed schema backing all of the above.
+5. `agents/registry.yaml` — the real, populated registry data.
+
+Read in this order before writing any MSHOPS.NET-side code, which belongs
 in a different repo/service, not here.
 
 No lore or mythology has been introduced in this section or its linked
@@ -225,23 +239,36 @@ operator. Full detail (rule tables, schema, YAML) lives in `AGENT_HQ.md`'s
   the `operator` priority lane; and shift the whole system toward more
   transparency, caution, verbosity, and deference whenever the operator
   is present.
-- **How routing changes (`ROUTE-1`–`ROUTE-5` in `AGENT_HQ.md`):** for
+- **How routing changes (`ROUTE-1`–`ROUTE-6` in `AGENT_HQ.md`):** for
   operator-originated intents, the operator's lane overrides any agent-
   suggested lane, operator tags supersede agent tags, and operator
   requests bypass throttling, `conditional`-mode gating, and `manual`-mode
-  gating in the future routing layer.
+  gating in the future routing layer. Separately (`ROUTE-6`), any intent
+  with an open escalation is routed to a reserved `operator-review` lane
+  regardless of who originated it.
+- **The Escalation Lifecycle** (new in schema v2, full detail in
+  `AGENT_HQ.md`): `GOV-1`, `GOV-2`, `GOV-3`, and `GOV-5` each produce an
+  `EscalationEvent` (schema in `core/registry.py`) with a default severity
+  (`low`/`medium`/`high`/`critical`) and a `pending -> acknowledged ->
+  resolved` (or `dismissed`) state machine. **Only the registered operator
+  may resolve or dismiss an escalation** — this is the concrete meaning of
+  "operator arbitration" and "operator review required." `GOV-4` (new
+  agent/engine approval) is deliberately *not* an escalation — it's
+  represented by the registry's own `status` field instead.
 - **How assistants must ingest and respect this layer:** treat `GOV-n` and
   `ROUTE-n` as binding constraints on any Agent HQ / MSHOPS.NET design
   work — a design that lets agents self-resolve conflicts without operator
-  arbitration, or lets non-operator requests bypass gating meant to be
-  operator-exclusive, violates this layer and should be flagged, not built.
+  arbitration, lets non-operator requests bypass gating meant to be
+  operator-exclusive, or lets any actor besides the operator resolve/
+  dismiss an escalation, violates this layer and should be flagged, not
+  built.
 
 **Same non-goals as the rest of Agent HQ:** no enforcement, dispatch, or
-arbitration code exists in this repo implementing these rules — they are
-policy for future design work. No lore has been introduced; if narrative
-framing of "Operator Office" or anything else is ever wanted, it belongs
-in a separate, explicitly-labeled document (e.g. `GHOSTLAYERLORE.md`),
-never in this file.
+arbitration code exists in this repo implementing these rules or the
+escalation state machine — `EscalationEvent` is a schema, not a queue or
+database. No lore has been introduced; if narrative framing of "Operator
+Office" or anything else is ever wanted, it belongs in a separate,
+explicitly-labeled document (e.g. `GHOSTLAYERLORE.md`), never in this file.
 
 ## Working in this repo
 
