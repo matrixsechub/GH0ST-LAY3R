@@ -10,6 +10,9 @@ Agents are modular intelligence operators that:
 - Observe substrate state
 - Decide if they should activate
 - Produce structured outputs for the Oversoul to fuse
+
+A "module" in the Ghost Layer sense is simply an object implementing the
+Agent protocol below; there is no separate module abstraction.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Protocol
 
 from core.substrate import SubstrateState
-from core.engine import IntentVector
+from core.types import IntentVector
 
 
 # ---------------------------------------------------------------------------
@@ -128,4 +131,35 @@ class OperatorDoctrineAgent:
             "doctrine": "bounded-escalation",
             "intent_tags": intent.tags,
             "spectral_density": state.spectral_density,
+        }
+
+
+@dataclass
+class RouteAdvisoryAgent:
+    """
+    Suggests which future Ghost Layer subsystem an intent would plausibly
+    route to, based on lightweight tag/volatility heuristics. Advisory only —
+    does not perform any actual routing or call any external system.
+    """
+    name: str = "RouteAdvisoryAgent"
+
+    def supports(self, intent: IntentVector, state: SubstrateState) -> bool:
+        return True  # always active, like OperatorDoctrineAgent
+
+    def run(self, intent: IntentVector, state: SubstrateState) -> Dict[str, Any]:
+        tags = set(intent.tags)
+        if tags.intersection({"high-risk", "escalate", "critical"}):
+            suggested_lane = "containment-review"
+        elif state.volatility > 0.5:
+            suggested_lane = "adversarial-intel"
+        else:
+            suggested_lane = "general-intake"
+
+        return {
+            "suggested_lane": suggested_lane,
+            "confidence": "heuristic",
+            "basis": {
+                "intent_tags": intent.tags,
+                "volatility": state.volatility,
+            },
         }

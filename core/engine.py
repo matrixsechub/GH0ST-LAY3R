@@ -17,6 +17,7 @@ from typing import Any, Dict, List
 import logging
 import uuid
 
+from core.types import OperatorAxis, IntentVector
 from core.substrate import SubstrateState, SubstrateIngestion
 from core.physics import DefaultDominionPhysics
 from core.oversoul import DefaultOversoul, OversoulConfig
@@ -26,6 +27,7 @@ from agents.constellation import (
     AdversarialIntelAgent,
     ContainmentAgent,
     OperatorDoctrineAgent,
+    RouteAdvisoryAgent,
 )
 
 # ---------------------------------------------------------------------------
@@ -46,21 +48,6 @@ logger.setLevel(logging.INFO)
 # ---------------------------------------------------------------------------
 # Core Data Models
 # ---------------------------------------------------------------------------
-
-@dataclass
-class OperatorAxis:
-    alignment: str = "operator-defensive"
-    doctrine: str = "bounded-escalation"
-    signature: str = "MatrixSecHub"
-
-
-@dataclass
-class IntentVector:
-    id: str
-    source: str
-    description: str
-    tags: List[str] = field(default_factory=list)
-
 
 @dataclass
 class EngineConfig:
@@ -187,6 +174,7 @@ def create_default_engine() -> GhostLayerEngine:
             AdversarialIntelAgent(),
             ContainmentAgent(),
             OperatorDoctrineAgent(),
+            RouteAdvisoryAgent(),
         ]
     )
 

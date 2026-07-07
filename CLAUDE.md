@@ -32,13 +32,14 @@ user if ambiguous rather than trying to build out the fictional scaffolding.
 ```
 GH0ST-LAY3R/
 ├── core/
+│   ├── types.py           # IntentVector + OperatorAxis: shared, dependency-free data models
 │   ├── substrate.py      # SubstrateState + SubstrateIngestion: turns raw input into metrics
 │   ├── physics.py        # DefaultDominionPhysics: mutates SubstrateState based on intent tags
 │   ├── engine.py         # GhostLayerEngine + create_default_engine(): main orchestrator
 │   ├── oversoul.py       # Oversoul / DefaultOversoul: fuses agent outputs, does bounded recursion
 │   └── output.py         # OutputReactor / OutputEnvelope: final output shaping
 ├── agents/
-│   └── constellation.py  # Agent protocol, AgentConstellation registry, 3 example agents
+│   └── constellation.py  # Agent protocol, AgentConstellation registry, 4 example agents
 ├── scripts/
 │   └── run_demo.py       # CLI-style entrypoint that boots the engine and prints JSON output
 ├── IMAGES/                # Diagram/banner assets referenced by README.md
@@ -68,8 +69,11 @@ CI configuration in this repo. There are no `__init__.py` files — `core` and
 3. **`AgentConstellation`** (`agents/constellation.py`) — runs each agent
    whose `supports()` predicate is true against the current
    intent/state, catching and recording per-agent exceptions rather than
-   raising. Ships three example agents: `AdversarialIntelAgent`,
-   `ContainmentAgent`, `OperatorDoctrineAgent`.
+   raising. Ships four example agents: `AdversarialIntelAgent`,
+   `ContainmentAgent`, `OperatorDoctrineAgent`, and `RouteAdvisoryAgent`
+   (advisory-only — suggests a generic routing "lane" via tag/volatility
+   heuristics, without any real subsystem behind it; see "Extension point"
+   below).
 4. **`DefaultOversoul`** (`core/oversoul.py`) — `absorb()` fuses agent
    outputs into one dict; `recurse()` recursively refines
    `spectral_density` up to `EngineConfig.max_recursion` (default 3).
@@ -80,27 +84,37 @@ CI configuration in this repo. There are no `__init__.py` files — `core` and
 `GhostLayerEngine.run(raw, source=...)` in `core/engine.py` executes this
 pipeline in one call and returns the final envelope as a `dict`.
 
-## ⚠️ Known bug: circular import
+## Circular import (fixed) + extension point
 
-`core/engine.py`, `core/physics.py`, `core/oversoul.py`, and `core/output.py`
-all import `IntentVector` from `core.engine`, while `core/engine.py` imports
-`DefaultDominionPhysics` from `core.physics` and `DefaultOversoul` from
-`core.oversoul` at module load time. This is a circular import and **the demo
-currently cannot run**:
+`IntentVector` and `OperatorAxis` used to live in `core/engine.py`, while
+`core/physics.py`, `core/oversoul.py`, `core/output.py`, and
+`agents/constellation.py` all imported `IntentVector` back from
+`core.engine` — a circular import that made the demo unrunnable. Both
+dataclasses now live in `core/types.py`, which has no dependency on
+`core.engine`; the four modules above import `IntentVector` from
+`core.types` instead. `core/engine.py` re-imports both names from
+`core.types` for its own use (`EngineConfig.operator_axis`,
+`IntentVector` construction in `_build_intent`). `PYTHONPATH=. python3
+scripts/run_demo.py` now runs successfully.
 
-```
-$ PYTHONPATH=. python3 scripts/run_demo.py
-ImportError: cannot import name 'IntentVector' from partially initialized
-module 'core.engine' (most likely due to a circular import)
-```
+(A second, previously-masked bug was uncovered by this fix and fixed at the
+same time: `DefaultOversoul.config` used a mutable dataclass instance —
+`OversoulConfig()` — as a field default, which Python's dataclass machinery
+rejects. It now uses `field(default_factory=OversoulConfig)`.)
 
-If asked to fix, run, or extend this engine, the circular import must be
-resolved first — e.g. by moving `IntentVector` (and possibly `OperatorAxis`)
-into `core/substrate.py` or a new `core/types.py` that has no dependency on
-`core/engine.py`, then updating the four importing modules. Don't paper over
-it with local/deferred imports inside function bodies unless the user
-specifically prefers that approach — a shared types module is the cleaner
-fix.
+**Extension point for future subsystems:** a pluggable "module" — for any
+future engine (the planned MSHOPS.NET-hosted agent layer, a flywheel, a bug
+bounty HQ, a TTX engine, marketplace modules, Cloudflare Workers, etc.) — is
+simply a class implementing the `Agent` Protocol in
+`agents/constellation.py`: `name: str`, `supports(intent, state) -> bool`,
+`run(intent, state) -> dict`, registered into `AgentConstellation`. There is
+no separate `Module` type or registry-of-registries — `Agent` *is* the
+module interface. None of those future subsystems exist in this repo; only
+this interface does. `RouteAdvisoryAgent` (in `agents/constellation.py`) is
+a minimal worked example: it always activates and returns a generic
+`suggested_lane` string based on intent tags/volatility, without performing
+any real routing or referencing any real subsystem — demonstrating the
+pattern without building ahead of need.
 
 ## Running things
 
@@ -109,8 +123,6 @@ There's no packaging, so the repo root must be on `PYTHONPATH`:
 ```bash
 PYTHONPATH=. python3 scripts/run_demo.py
 ```
-
-(This will currently fail with the circular import above until fixed.)
 
 There are no tests and no linter configuration in this repo. If you add
 tests, there's no existing convention to follow — pick something standard
@@ -126,6 +138,15 @@ tests, there's no existing convention to follow — pick something standard
 - Agents are plain dataclasses implementing `supports()` + `run()`; add new
   agents by following that shape and registering them in
   `create_default_engine()`'s `AgentConstellation(agents=[...])` list.
+- Shared, dependency-free data models (plain dataclasses with no logic used
+  by more than one module) belong in `core/types.py`, not in whichever
+  module happens to use them first — that's what caused the circular
+  import documented above. `core/types.py` must never import from
+  `core.engine` or anything that transitively does.
+- The `Agent` Protocol (`agents/constellation.py`) is the intended plug-in
+  point for future subsystems — see "Extension point for future
+  subsystems" above. There is deliberately no separate `Module` name in
+  code; "module" and "agent" refer to the same thing here.
 - Logging goes through the module-level `logger` in `core/engine.py`
   (`logging.getLogger("ghost_layer_engine")`), not `print` (except in
   `scripts/run_demo.py`, which is a user-facing CLI script).

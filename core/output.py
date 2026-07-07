@@ -15,7 +15,7 @@ from typing import Any, Dict
 import time
 
 from core.substrate import SubstrateState
-from core.engine import IntentVector  # where IntentVector currently lives
+from core.types import IntentVector
 
 
 @dataclass
