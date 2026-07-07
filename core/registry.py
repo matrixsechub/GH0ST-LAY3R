@@ -2,10 +2,11 @@
 Ghost Layer Studio — Agent HQ Registry Schema
 
 Responsibilities:
-- Define the shape of an agent/engine registry entry (schema only)
+- Define the shape of an agent/engine/operator registry entry (schema only)
 - No I/O, no parsing, no wiring into the running engine
 - The canonical registry data lives in agents/registry.yaml; see
-  AGENT_HQ.md for the full protocol this schema supports
+  AGENT_HQ.md for the full protocol this schema supports, including the
+  HITL Governance Layer that OperatorEntry belongs to
 """
 
 from __future__ import annotations
@@ -40,3 +41,20 @@ class AgentRegistryEntry:
     tags: List[str] = field(default_factory=list)
     description: str = ""
     produces: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class OperatorEntry:
+    """
+    Describes the Human-In-The-Loop (HITL) operator. HQ-level, not bound to
+    any single EngineBinding — see AGENT_HQ.md's "HITL Governance Layer".
+    """
+
+    operator_id: str
+    role: str
+    authority: str
+    priority_lane: str
+    escalation_required: bool
+    type: Literal["operator"] = "operator"
+    capabilities: List[str] = field(default_factory=list)
+    binding: str = "HQ-level"

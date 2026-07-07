@@ -1,9 +1,10 @@
 # Agent HQ registry
 #
-# Describes the agents and engines that actually exist in this repo today.
-# Schema: core/registry.py (EngineBinding, AgentRegistryEntry). Protocol and
-# routing model: AGENT_HQ.md. Hand-maintained — nothing in this repo parses
-# or enforces this file at runtime. It is the data source a future
+# Describes the agents, engines, and the HITL operator that actually exist
+# in this repo today. Schema: core/registry.py (EngineBinding,
+# AgentRegistryEntry, OperatorEntry). Protocol, routing model, and HITL
+# Governance Layer: AGENT_HQ.md. Hand-maintained — nothing in this repo
+# parses or enforces this file at runtime. It is the data source a future
 # MSHOPS.NET registry service would import.
 
 schema_version: 1
@@ -16,6 +17,16 @@ engines:
       dominion -> constellation -> oversoul -> reactor. The only engine
       that actually exists and runs today.
     entrypoint: core.engine.create_default_engine
+
+operators:
+  - type: operator
+    operator_id: lupe
+    role: HITL
+    authority: root
+    priority_lane: operator
+    escalation_required: true
+    capabilities: [override, arbitration, review, priority]
+    binding: HQ-level
 
 agents:
   - id: adversarial-intel-agent

@@ -51,7 +51,7 @@ GH0ST-LAY3R/
 │   └── registry.py       # Agent HQ registry schema (dataclasses only, no I/O) — see AGENT_HQ.md
 ├── agents/
 │   ├── constellation.py  # Agent protocol, AgentConstellation registry, 4 example agents
-│   └── registry.yaml     # Hand-maintained Agent HQ registry data (real agents/engine only)
+│   └── registry.yaml     # Hand-maintained Agent HQ registry data (real agents/engine/operator only)
 ├── scripts/
 │   └── run_demo.py       # CLI-style entrypoint that boots the engine and prints JSON output
 ├── IMAGES/                # Diagram/banner assets referenced by README.md
@@ -177,12 +177,14 @@ MSHOPS.NET, will run in production. This section is a summary; the actual
 specs live in dedicated files so this document stays scannable:
 
 - **`core/registry.py`** — the registry schema (plain dataclasses:
-  `EngineBinding`, `AgentRegistryEntry`; no logic, no I/O).
+  `EngineBinding`, `AgentRegistryEntry`, `OperatorEntry`; no logic, no I/O).
 - **`agents/registry.yaml`** — the registry populated with what actually
-  exists today: one engine (`ghost-layer-core`) and its four agents.
-  Hand-maintained; nothing in this repo parses it.
+  exists today: one engine (`ghost-layer-core`), its four agents, and one
+  HITL operator entry (`operators:`). Hand-maintained; nothing in this
+  repo parses it.
 - **`AGENT_HQ.md`** — the full protocol: how agents register, how engines
-  declare capabilities, and the routing model (lanes, modes, statuses).
+  declare capabilities, the routing model (lanes, modes, statuses), and
+  the HITL Governance Layer (see below).
 - **`API_CONTRACT.md`** — a draft REST contract for the future MSHOPS.NET
   backend (`POST /intents`, `GET /agents`, etc.).
 
@@ -202,6 +204,44 @@ in a different repo/service, not here.
 No lore or mythology has been introduced in this section or its linked
 docs; it is written entirely in the technical register, consistent with
 this file's canonical status.
+
+## HITL Governance Layer
+
+Agent HQ includes a governance layer defining how agents and the future
+routing layer must behave toward the accountable Human-In-The-Loop (HITL)
+operator. Full detail (rule tables, schema, YAML) lives in `AGENT_HQ.md`'s
+"HITL Governance Layer (Operator Office)" section — this is a summary.
+
+- **What HITL means:** there is one accountable human operator for this
+  system (`operator_id: lupe`, registered HQ-level — not bound to any
+  single engine — in `agents/registry.yaml`'s `operators:` list, schema
+  `OperatorEntry` in `core/registry.py`). "HITL" and "operator" are plain
+  technical terms here, not narrative ones.
+- **How agents must behave (`GOV-1`–`GOV-7` in `AGENT_HQ.md`):** escalate
+  on uncertainty; defer conflicting outputs to operator arbitration;
+  require operator review on high-risk-tagged intents; require operator
+  approval to register a new agent or engine; alert the operator when a
+  safety boundary is touched; always run operator-originated intents in
+  the `operator` priority lane; and shift the whole system toward more
+  transparency, caution, verbosity, and deference whenever the operator
+  is present.
+- **How routing changes (`ROUTE-1`–`ROUTE-5` in `AGENT_HQ.md`):** for
+  operator-originated intents, the operator's lane overrides any agent-
+  suggested lane, operator tags supersede agent tags, and operator
+  requests bypass throttling, `conditional`-mode gating, and `manual`-mode
+  gating in the future routing layer.
+- **How assistants must ingest and respect this layer:** treat `GOV-n` and
+  `ROUTE-n` as binding constraints on any Agent HQ / MSHOPS.NET design
+  work — a design that lets agents self-resolve conflicts without operator
+  arbitration, or lets non-operator requests bypass gating meant to be
+  operator-exclusive, violates this layer and should be flagged, not built.
+
+**Same non-goals as the rest of Agent HQ:** no enforcement, dispatch, or
+arbitration code exists in this repo implementing these rules — they are
+policy for future design work. No lore has been introduced; if narrative
+framing of "Operator Office" or anything else is ever wanted, it belongs
+in a separate, explicitly-labeled document (e.g. `GHOSTLAYERLORE.md`),
+never in this file.
 
 ## Working in this repo
 
