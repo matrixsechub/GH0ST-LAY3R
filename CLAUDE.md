@@ -1,0 +1,145 @@
+# CLAUDE.md
+
+Guidance for Claude Code (and other AI assistants) working in this repository.
+
+## What this repo actually is
+
+GH0ST-LAY3R ("Ghost Layer Studio") is a **small, single-file-per-concern Python
+demo package** with heavy cinematic/marketing framing in its prose docs. Read
+the code in `core/`, `agents/`, and `scripts/` to understand actual behavior —
+do not take the README, `ABOUT.txt`, `GHOST_LAYER.txt`,
+`RELEASE_ANNOUNCEMENT.txt`, or `REPO_STRUCTURE_COMPLETE.txt` literally.
+
+**Important gap between docs and reality:**
+- `README.md` describes a `glce` Python package with kernels, AMR grids, MPI
+  ghost-layer physics, a CLI (`glce run`), PyPI packaging, tests, and configs
+  under `glce/`, `configs/`, `tests/`, `examples/` — **none of this exists in
+  the repo.** It's a leftover scaffold/pitch from a cosmology-simulator concept
+  that was never built here.
+- `REPO_STRUCTURE_COMPLETE.txt` describes a completely different **TypeScript
+  / Vercel / n8n** project (`core/engine/`, `modules/mythos/`, `api/routes/`,
+  `automations/n8n/`, `package.json`, `tsconfig.json`, GitHub Actions
+  CI/deploy). **None of this exists either.**
+- The actual code that exists is the plain Python engine described below.
+
+When asked to "add a feature" or "fix a bug," check whether the request is
+about the real Python engine (`core/`, `agents/`, `scripts/`) or about one of
+the aspirational systems described in the prose docs, and clarify with the
+user if ambiguous rather than trying to build out the fictional scaffolding.
+
+## Repository layout
+
+```
+GH0ST-LAY3R/
+├── core/
+│   ├── substrate.py      # SubstrateState + SubstrateIngestion: turns raw input into metrics
+│   ├── physics.py        # DefaultDominionPhysics: mutates SubstrateState based on intent tags
+│   ├── engine.py         # GhostLayerEngine + create_default_engine(): main orchestrator
+│   ├── oversoul.py       # Oversoul / DefaultOversoul: fuses agent outputs, does bounded recursion
+│   └── output.py         # OutputReactor / OutputEnvelope: final output shaping
+├── agents/
+│   └── constellation.py  # Agent protocol, AgentConstellation registry, 3 example agents
+├── scripts/
+│   └── run_demo.py       # CLI-style entrypoint that boots the engine and prints JSON output
+├── IMAGES/                # Diagram/banner assets referenced by README.md
+├── README.md              # Aspirational "Ghost Layer Cosmology Engine" pitch (see gap note above)
+├── ABOUT.txt, GHOST_LAYER.txt, RELEASE_ANNOUNCEMENT.txt  # Narrative/marketing text
+├── REPO_STRUCTURE_COMPLETE.txt  # Aspirational TS/Vercel scaffold description (not implemented)
+└── LICENSE.txt            # MIT, Copyright Guadalupe Gallegos (MatrixSecHub)
+```
+
+There is no `pyproject.toml`, `setup.py`, `requirements.txt`, test suite, or
+CI configuration in this repo. There are no `__init__.py` files — `core` and
+`agents` work as implicit namespace packages only when the repo root is on
+`sys.path`.
+
+## Runtime data flow
+
+`scripts/run_demo.py` → `core.engine.create_default_engine()` wires up:
+
+1. **`SubstrateIngestion`** (`core/substrate.py`) — normalizes raw input
+   (str/dict/list/other) into a `SubstrateState` with computed
+   `spectral_density` (token-uniqueness ratio) and `volatility`
+   (punctuation/caps heuristic via `tanh`).
+2. **`DefaultDominionPhysics`** (`core/physics.py`) — adjusts
+   `state.volatility`/`spectral_density` based on `IntentVector.tags`
+   (e.g. `"high-risk"`, `"escalate"`, `"critical"` boost volatility;
+   `"focus"`/`"diffuse"` shift density).
+3. **`AgentConstellation`** (`agents/constellation.py`) — runs each agent
+   whose `supports()` predicate is true against the current
+   intent/state, catching and recording per-agent exceptions rather than
+   raising. Ships three example agents: `AdversarialIntelAgent`,
+   `ContainmentAgent`, `OperatorDoctrineAgent`.
+4. **`DefaultOversoul`** (`core/oversoul.py`) — `absorb()` fuses agent
+   outputs into one dict; `recurse()` recursively refines
+   `spectral_density` up to `EngineConfig.max_recursion` (default 3).
+5. **`OutputReactor`** (`core/output.py`) — wraps everything into a final
+   `OutputEnvelope` dict (`intent_id`, `source`, `operator_axis`,
+   `spectral_density`, `volatility`, `payload`, `timestamp`, `meta`).
+
+`GhostLayerEngine.run(raw, source=...)` in `core/engine.py` executes this
+pipeline in one call and returns the final envelope as a `dict`.
+
+## ⚠️ Known bug: circular import
+
+`core/engine.py`, `core/physics.py`, `core/oversoul.py`, and `core/output.py`
+all import `IntentVector` from `core.engine`, while `core/engine.py` imports
+`DefaultDominionPhysics` from `core.physics` and `DefaultOversoul` from
+`core.oversoul` at module load time. This is a circular import and **the demo
+currently cannot run**:
+
+```
+$ PYTHONPATH=. python3 scripts/run_demo.py
+ImportError: cannot import name 'IntentVector' from partially initialized
+module 'core.engine' (most likely due to a circular import)
+```
+
+If asked to fix, run, or extend this engine, the circular import must be
+resolved first — e.g. by moving `IntentVector` (and possibly `OperatorAxis`)
+into `core/substrate.py` or a new `core/types.py` that has no dependency on
+`core/engine.py`, then updating the four importing modules. Don't paper over
+it with local/deferred imports inside function bodies unless the user
+specifically prefers that approach — a shared types module is the cleaner
+fix.
+
+## Running things
+
+There's no packaging, so the repo root must be on `PYTHONPATH`:
+
+```bash
+PYTHONPATH=. python3 scripts/run_demo.py
+```
+
+(This will currently fail with the circular import above until fixed.)
+
+There are no tests and no linter configuration in this repo. If you add
+tests, there's no existing convention to follow — pick something standard
+(`pytest`, files under a `tests/` directory) and mention the choice.
+
+## Conventions actually used in the code
+
+- Python 3.10+ style: `from __future__ import annotations`, dataclasses,
+  `typing.Protocol` for structural interfaces (`Agent`, `DominionPhysics`).
+- Modules open with a docstring block titled `Ghost Layer Studio — <Module
+  Name>` followed by a short responsibilities list — match this style if
+  adding new `core/`/`agents/` modules.
+- Agents are plain dataclasses implementing `supports()` + `run()`; add new
+  agents by following that shape and registering them in
+  `create_default_engine()`'s `AgentConstellation(agents=[...])` list.
+- Logging goes through the module-level `logger` in `core/engine.py`
+  (`logging.getLogger("ghost_layer_engine")`), not `print` (except in
+  `scripts/run_demo.py`, which is a user-facing CLI script).
+- No error handling for things that "can't happen"; the one deliberate
+  try/except is in `AgentConstellation.run_all`, which isolates a failing
+  agent so one bad agent doesn't kill the whole run.
+
+## Working in this repo
+
+- Treat the prose `.txt` files and `README.md` as narrative/marketing
+  content, not specs — don't try to reconcile new code with their
+  architecture diagrams (glce kernels, TypeScript modules, Vercel API
+  routes, etc.) unless the user explicitly wants to build those out.
+- The `IMAGES/` folder is large binary diagram assets used purely by
+  `README.md`'s narrative sections; there's no need to touch these for code
+  changes.
+- Keep changes scoped to the actual Python engine unless told otherwise.
