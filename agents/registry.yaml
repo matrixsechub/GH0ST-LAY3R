@@ -1,9 +1,11 @@
-# Agent HQ registry (schema v2)
+# Agent HQ registry (schema v3)
 #
 # Describes the agents, engines, and the HITL operator that actually exist
 # in this repo today. Schema: core/registry.py (EngineBinding,
-# AgentRegistryEntry, OperatorEntry, EscalationEvent). Protocol, routing
-# model, HITL Governance Layer, and Escalation Lifecycle: AGENT_HQ.md.
+# AgentRegistryEntry, OperatorEntry, EscalationEvent, and v3 additions).
+# Protocol, routing model, HITL Governance Layer, Escalation Lifecycle,
+# Agent Lifecycle & Deployment, Multi-Engine Coordination, Operator
+# Surfaces, HQ Health & Observability, and Agent Pools: AGENT_HQ.md.
 # Hand-maintained — nothing in this repo parses or enforces this file at
 # runtime. It is the data source a future MSHOPS.NET registry service
 # would import.
@@ -11,10 +13,14 @@
 # v2 adds `type` discriminators and `capabilities` to engines/agents
 # (previously operator-only) and the EscalationEvent schema in
 # core/registry.py. No escalation *data* lives here — escalations are
-# runtime events, not hand-maintained registry entries; see AGENT_HQ.md's
-# "Escalation Lifecycle" for an illustrative (non-real) example.
+# runtime events, not hand-maintained registry entries.
+#
+# v3 adds runtime-event schemas: AgentDeploymentRecord, EngineHealthRecord,
+# RoutingTableEntry, CapabilityIndex, AuditEvent, OperatorSessionRecord,
+# AgentPool, HQHealthRecord. No new hand-maintained data lives here —
+# all v3 record types are runtime events managed by MSHOPS.NET.
 
-schema_version: 2
+schema_version: 3
 
 engines:
   - type: engine

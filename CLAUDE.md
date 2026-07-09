@@ -176,24 +176,30 @@ registry, protocol, and routing model that a future external system,
 MSHOPS.NET, will run in production. This section is a summary; the actual
 specs live in dedicated files so this document stays scannable:
 
-- **`core/registry.py`** (schema v2) — the registry schema: `EngineBinding`,
-  `AgentRegistryEntry`, `OperatorEntry`, `EscalationEvent`, and a
-  `RegistryRecord` union type; no logic, no I/O. Every record type carries
-  a `type` discriminator (`"engine"`/`"agent"`/`"operator"`/`"escalation"`).
-- **`agents/registry.yaml`** (schema v2) — the registry populated with what
+- **`core/registry.py`** (schema v3) — the full HQ schema: `EngineBinding`,
+  `AgentRegistryEntry`, `OperatorEntry`, `EscalationEvent`,
+  `AgentDeploymentRecord`, `EngineHealthRecord`, `RoutingTableEntry`,
+  `CapabilityIndex`, `AuditEvent`, `OperatorSessionRecord`, `AgentPool`,
+  `HQHealthRecord`, and a `RegistryRecord` union type; no logic, no I/O.
+  Every record type carries a `type` discriminator field.
+- **`agents/registry.yaml`** (schema v3) — the registry populated with what
   actually exists today: one engine (`ghost-layer-core`, with real
   `capabilities`), its four agents (each with real `capabilities`), and
-  one HITL operator entry (`operators:`). No `escalations:` list — those
-  are runtime events, not hand-maintained data. Hand-maintained; nothing
-  in this repo parses it.
+  one HITL operator entry (`operators:`). No runtime-event data lives here —
+  all v3 record types (`AgentDeploymentRecord`, `AuditEvent`, etc.) are
+  managed by MSHOPS.NET. Hand-maintained; nothing in this repo parses it.
 - **`AGENT_HQ.md`** — the full protocol: how agents register, how engines
   declare capabilities, the routing model (lanes, modes, statuses), the
-  HITL Governance Layer (see below), the Escalation Lifecycle, and a
-  schema-versioning changelog.
-- **`API_CONTRACT.md`** (draft v1) — a draft REST contract for the future
-  MSHOPS.NET backend: intents, agents, engines, operators, and escalations
-  (`POST /intents`, `GET /agents`, `GET /operators`, `POST /escalations`,
-  `PATCH /escalations/:id`, etc.).
+  HITL Governance Layer (see below), the Escalation Lifecycle, Agent
+  Lifecycle & Deployment, Multi-Engine Coordination, Operator Surfaces,
+  HQ Health & Observability, Agent Pools, and a schema-versioning changelog.
+- **`API_CONTRACT.md`** (draft v2) — a draft REST contract for the future
+  MSHOPS.NET backend: intents, agents, engines, operators, escalations,
+  deployments, engine health, routing table, capability index, audit trail,
+  operator sessions, agent pools, and HQ health (`POST /intents`,
+  `GET /agents`, `GET /operators`, `POST /escalations`,
+  `PATCH /escalations/:id`, `POST /deployments`, `PATCH /deployments/:id`,
+  `GET /audit`, `POST /operator/sessions`, `GET /hq/health`, etc.).
 
 **None of this is wired into the running engine.** `create_default_engine()`
 in `core/engine.py` is unchanged and remains the only real runtime path in
@@ -207,7 +213,8 @@ engine unless explicitly asked; that would conflate "documented plan" with
 
 1. `CLAUDE.md` (this file) — canonical; wins on any conflict.
 2. `AGENT_HQ.md` — protocol, routing model, HITL Governance Layer,
-   Escalation Lifecycle.
+   Escalation Lifecycle, Agent Lifecycle & Deployment, Multi-Engine
+   Coordination, Operator Surfaces, HQ Health & Observability, Agent Pools.
 3. `API_CONTRACT.md` — draft REST contract built on the above.
 4. `core/registry.py` — the typed schema backing all of the above.
 5. `agents/registry.yaml` — the real, populated registry data.
@@ -261,7 +268,12 @@ operator. Full detail (rule tables, schema, YAML) lives in `AGENT_HQ.md`'s
   arbitration, lets non-operator requests bypass gating meant to be
   operator-exclusive, or lets any actor besides the operator resolve/
   dismiss an escalation, violates this layer and should be flagged, not
-  built.
+  built. Additionally, `AuditEvent` and `OperatorSessionRecord` are the
+  observable surfaces through which GOV-7 and escalation lifecycle
+  compliance is verified: a design that does not produce `AuditEvent`
+  records for governance transitions, or that determines operator presence
+  through any mechanism other than `OperatorSessionRecord.ended_at`,
+  violates the spec.
 
 **Same non-goals as the rest of Agent HQ:** no enforcement, dispatch, or
 arbitration code exists in this repo implementing these rules or the
