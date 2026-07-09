@@ -11,11 +11,13 @@ Responsibilities:
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, TYPE_CHECKING
 import time
 
 from core.substrate import SubstrateState
-from core.engine import IntentVector  # where IntentVector currently lives
+
+if TYPE_CHECKING:
+    from core.engine import IntentVector  # where IntentVector currently lives
 
 
 @dataclass

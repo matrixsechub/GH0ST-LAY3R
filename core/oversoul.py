@@ -11,11 +11,13 @@ This is intentionally lightweight but extensible.
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import Any, Dict, List
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, TYPE_CHECKING
 
 from core.substrate import SubstrateState
-from core.engine import IntentVector  # if IntentVector lives in engine.py
+
+if TYPE_CHECKING:
+    from core.engine import IntentVector  # if IntentVector lives in engine.py
 
 
 @dataclass
@@ -64,7 +66,7 @@ class DefaultOversoul(Oversoul):
     - Performs shallow recursion (depth-limited)
     """
 
-    config: OversoulConfig = OversoulConfig()
+    config: OversoulConfig = field(default_factory=OversoulConfig)
 
     def absorb(
         self,
