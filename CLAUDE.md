@@ -53,7 +53,8 @@ GH0ST-LAY3R/
 │   ├── constellation.py  # Agent protocol, AgentConstellation registry, 4 example agents
 │   └── registry.yaml     # Hand-maintained Agent HQ registry data (real agents/engine/operator only)
 ├── scripts/
-│   └── run_demo.py       # CLI-style entrypoint that boots the engine and prints JSON output
+│   ├── run_demo.py       # CLI-style entrypoint that boots the engine and prints JSON output
+│   └── serve.py          # HQ HTTP server (dev-grade, stdlib only) — see "Running things"
 ├── IMAGES/                # Diagram/banner assets referenced by README.md
 ├── README.md              # Aspirational "Ghost Layer Cosmology Engine" pitch (see gap note above)
 ├── AGENT_HQ.md            # Agent HQ protocol + routing model (design spec, not implemented)
@@ -136,8 +137,23 @@ into a registry and protocol in "Agent HQ design spec" below.
 There's no packaging, so the repo root must be on `PYTHONPATH`:
 
 ```bash
-PYTHONPATH=. python3 scripts/run_demo.py
+PYTHONPATH=. python3 scripts/run_demo.py              # one-shot demo, prints JSON
+PYTHONPATH=. python3 scripts/serve.py [--port 8000]   # HQ HTTP server (see below)
 ```
+
+`scripts/serve.py` starts a single-process, dev-grade HTTP server that wraps
+`GhostLayerEngine` and exposes a subset of `API_CONTRACT.md` v2 endpoints:
+`POST /intents`, `GET /hq/health`, `GET /audit`, `GET /escalations`,
+`GET /agents`, `GET /engines`, `GET /operators`, `GET /agent-pools`. Default
+bind is `127.0.0.1:8000`; pass `--host 0.0.0.0` to expose on LAN. All state
+is in-memory and clears on restart. Optionally `pip install pyyaml` to parse
+`agents/registry.yaml` at startup; without it a hardcoded fallback is used.
+
+**GOV-4 gate:** `scripts/serve.py` is a bounded, operator-approved relaxation
+of this repo's no-HTTP-server convention. It is not a production daemon — no
+systemd unit, Docker image, or process manager is defined here. Any expansion
+of its scope or a separate deployment configuration requires operator
+sign-off per GOV-4 before being merged.
 
 There are no tests and no linter configuration in this repo. If you add
 tests, there's no existing convention to follow — pick something standard
@@ -201,13 +217,17 @@ specs live in dedicated files so this document stays scannable:
   `PATCH /escalations/:id`, `POST /deployments`, `PATCH /deployments/:id`,
   `GET /audit`, `POST /operator/sessions`, `GET /hq/health`, etc.).
 
-**None of this is wired into the running engine.** `create_default_engine()`
-in `core/engine.py` is unchanged and remains the only real runtime path in
-this repo. The registry/protocol/API docs are parallel design artifacts
-describing a system that does not exist yet — do not wire them into the
-engine unless explicitly asked; that would conflate "documented plan" with
-"shipped behavior," which is exactly the gap this file exists to prevent
-(see "What this repo actually is" above).
+**The spec is not wired into the engine — with one bounded exception.**
+`create_default_engine()` in `core/engine.py` is unchanged. `scripts/serve.py`
+(see "Running things") is the sole integration layer: a dev-grade HTTP server
+that wraps the engine and exposes a subset of `API_CONTRACT.md` v2 endpoints
+for local development and integration testing. It does not add persistence,
+enforcement, or routing logic — it is a thin HTTP skin, operator-approved per
+GOV-4. The registry/protocol/API docs remain parallel design artifacts
+describing a system that does not exist yet — do not wire additional spec
+behavior into the engine unless explicitly asked; that would conflate
+"documented plan" with "shipped behavior," which is exactly the gap this file
+exists to prevent (see "What this repo actually is" above).
 
 **Canonical ingestion order for anyone doing Agent HQ / MSHOPS.NET work:**
 
