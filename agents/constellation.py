@@ -163,3 +163,42 @@ class RouteAdvisoryAgent:
                 "volatility": state.volatility,
             },
         }
+
+
+@dataclass
+class IntakeAgentV2:
+    """
+    Classifies intents into lifecycle stages and exposes queue metrics for
+    HQ observability. Operator-action hooks (approve, escalate, close,
+    reassign, annotate) are surfaced through ttx-operator-shell's HQ console.
+
+    GOV-4 gate: this class is defined here but NOT registered in
+    create_default_engine() — that registration requires operator approval.
+    Status: experimental (see agents/registry.yaml id: intake-agent-v2).
+    See docs/intake-agent-v2-integration-plan.md for the full plan.
+    """
+    name: str = "IntakeAgentV2"
+    _ESCALATION_TAGS: tuple = ("high-risk", "escalate", "critical")
+
+    def supports(self, intent: IntentVector, state: SubstrateState) -> bool:
+        return True  # always-on once registered (GOV-4 gate is at registration)
+
+    def run(self, intent: IntentVector, state: SubstrateState) -> Dict[str, Any]:
+        tags = set(intent.tags)
+        needs_escalation = bool(tags.intersection(self._ESCALATION_TAGS)) or state.volatility >= 0.8
+        if needs_escalation:
+            stage = "escalated"
+            operator_action_required = True
+            available_actions = ["escalate", "close", "reassign", "annotate"]
+        else:
+            stage = "processing"
+            operator_action_required = False
+            available_actions = ["approve", "close", "annotate"]
+
+        return {
+            "intake_status": "received",
+            "lifecycle_stage": stage,
+            "queue_depth": 0,   # placeholder; real count managed by serve.py _intake_lifecycle
+            "operator_action_required": operator_action_required,
+            "operator_actions_available": available_actions,
+        }

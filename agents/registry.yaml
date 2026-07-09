@@ -109,3 +109,27 @@ agents:
       suggested_lane: str
       confidence: str
       basis: dict
+
+  - type: agent
+    id: intake-agent-v2
+    name: IntakeAgentV2
+    module_path: agents.constellation.IntakeAgentV2
+    engine: ghost-layer-core
+    mode: always-on
+    status: experimental
+    tags: [intake, lifecycle, queue, operator-surface]
+    capabilities: [intent-intake, queue-management, lifecycle-tracking, operator-action-hooks]
+    description: >
+      Classifies intents into lifecycle stages (queued -> processing ->
+      escalated | completed) and tracks queue metrics for HQ observability.
+      v2 adds structured lifecycle events and operator-action hooks
+      (approve, escalate, close, reassign, annotate) surfaced through
+      ttx-operator-shell's HQ console. Status experimental: requires
+      GOV-4 operator approval to promote to active and register with
+      create_default_engine().
+    produces:
+      intake_status: str
+      lifecycle_stage: str
+      queue_depth: int
+      operator_action_required: bool
+      operator_actions_available: list

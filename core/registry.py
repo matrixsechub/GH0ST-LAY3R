@@ -103,6 +103,10 @@ DeploymentStatus = Literal["pending", "deploying", "healthy", "degraded", "faile
 EngineHealthStatus = Literal["healthy", "degraded", "unavailable"]
 AuditActorType = Literal["operator", "agent", "system"]
 
+# Intake Agent v2 lifecycle types (see docs/intake-agent-v2-integration-plan.md)
+IntakeLifecycleStage = Literal["queued", "processing", "escalated", "completed"]
+IntakeOperatorAction = Literal["approve", "escalate", "close", "reassign", "annotate"]
+
 
 # ---------------------------------------------------------------------------
 # v3 Dataclasses
@@ -279,7 +283,34 @@ class HQHealthRecord:
     active_agent_ids: List[str] = field(default_factory=list)
     open_escalation_count: int = 0
     operator_online: bool = False
+    intake_queue_depth: int = 0
+    intake_processing_count: int = 0
+    intake_escalated_count: int = 0
     type: Literal["hq-health"] = "hq-health"
+
+
+@dataclass
+class IntakeLifecycleRecord:
+    """
+    Records one intake lifecycle event for an intent processed by
+    IntakeAgentV2. Tracks the intent's progression through lifecycle stages
+    and any operator actions taken. Append-only: each operator action or
+    stage transition produces a new record rather than mutating an existing
+    one. See docs/intake-agent-v2-integration-plan.md.
+
+    Stage machine: queued -> processing -> escalated | completed
+    """
+
+    id: str
+    intent_id: str
+    stage: IntakeLifecycleStage
+    created_at: str              # ISO 8601
+    updated_at: str              # ISO 8601
+    source: str = ""             # origin of the intent (operator, system, etc.)
+    operator_action: Optional[IntakeOperatorAction] = None
+    operator_notes: str = ""
+    resolved_at: Optional[str] = None
+    type: Literal["intake-lifecycle"] = "intake-lifecycle"
 
 
 # ---------------------------------------------------------------------------
@@ -303,4 +334,5 @@ RegistryRecord = Union[
     OperatorSessionRecord,
     AgentPool,
     HQHealthRecord,
+    IntakeLifecycleRecord,
 ]

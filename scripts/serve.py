@@ -12,14 +12,17 @@ Usage:
     PYTHONPATH=. python3 scripts/serve.py [--host 127.0.0.1] [--port 8000]
 
 Endpoints:
-    POST /intents          — run engine, GOV-7 header support
-    GET  /hq/health        — computed HQHealthRecord
-    GET  /audit            — AuditEvent[] (filter: event_type, actor_id, since)
-    GET  /escalations      — EscalationEvent[] (filter: status, severity)
-    GET  /agents           — agents from registry.yaml
-    GET  /engines          — engines from registry.yaml
-    GET  /operators        — operators from registry.yaml
-    GET  /agent-pools      — in-memory AgentPool[] (empty initially)
+    POST /intents                   — run engine, GOV-7 header support
+    GET  /hq/health                 — computed HQHealthRecord (includes intake counts)
+    GET  /audit                     — AuditEvent[] (filter: event_type, actor_id, since)
+    GET  /escalations               — EscalationEvent[] (filter: status, severity)
+    GET  /agents                    — agents from registry.yaml
+    GET  /engines                   — engines from registry.yaml
+    GET  /operators                 — operators from registry.yaml
+    GET  /agent-pools               — in-memory AgentPool[] (empty initially)
+    GET  /agents/intake-agent-v2    — registry entry for intake-agent-v2
+    GET  /intake-agent-v2/lifecycle — IntakeLifecycleRecord[] (append-only, since server start)
+    GET  /intake-agent-v2/metrics   — queue depth / processing / escalated / completed counts
 
 GOV-4 note: This file is a bounded, operator-approved relaxation of the
 no-HTTP-server constraint documented in CLAUDE.md. It is not a production
@@ -158,6 +161,34 @@ _REGISTRY_FALLBACK: dict = {
             ),
             "produces": {"suggested_lane": "str", "confidence": "str", "basis": "dict"},
         },
+        {
+            "type": "agent",
+            "id": "intake-agent-v2",
+            "name": "IntakeAgentV2",
+            "module_path": "agents.constellation.IntakeAgentV2",
+            "engine": "ghost-layer-core",
+            "mode": "always-on",
+            "status": "experimental",
+            "tags": ["intake", "lifecycle", "queue", "operator-surface"],
+            "capabilities": [
+                "intent-intake",
+                "queue-management",
+                "lifecycle-tracking",
+                "operator-action-hooks",
+            ],
+            "description": (
+                "Classifies intents into lifecycle stages and tracks queue metrics "
+                "for HQ observability. Status experimental — requires GOV-4 operator "
+                "approval to promote to active."
+            ),
+            "produces": {
+                "intake_status": "str",
+                "lifecycle_stage": "str",
+                "queue_depth": "int",
+                "operator_action_required": "bool",
+                "operator_actions_available": "list",
+            },
+        },
     ],
 }
 
@@ -183,10 +214,11 @@ _engine = create_default_engine()
 _registry: dict = _load_registry()
 _lock = threading.Lock()
 
-_audit_log: list = []    # AuditEvent dicts, append-only
-_escalations: list = []  # EscalationEvent dicts
-_sessions: list = []     # OperatorSessionRecord dicts
-_pools: list = []        # AgentPool dicts (empty until created via future endpoint)
+_audit_log: list = []        # AuditEvent dicts, append-only
+_escalations: list = []      # EscalationEvent dicts
+_sessions: list = []         # OperatorSessionRecord dicts
+_pools: list = []            # AgentPool dicts (empty until created via future endpoint)
+_intake_lifecycle: list = []  # IntakeLifecycleRecord dicts, append-only
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +306,9 @@ def _compute_hq_health() -> dict:
     open_escalation_count = sum(
         1 for e in _escalations if e.get("status") in ("pending", "acknowledged")
     )
+    intake_queue_depth = sum(1 for r in _intake_lifecycle if r.get("stage") == "queued")
+    intake_processing_count = sum(1 for r in _intake_lifecycle if r.get("stage") == "processing")
+    intake_escalated_count = sum(1 for r in _intake_lifecycle if r.get("stage") == "escalated")
     return {
         "type": "hq-health",
         "timestamp": _now(),
@@ -283,6 +318,9 @@ def _compute_hq_health() -> dict:
         "active_agent_ids": active_agent_ids,
         "open_escalation_count": open_escalation_count,
         "operator_online": _operator_online(),
+        "intake_queue_depth": intake_queue_depth,
+        "intake_processing_count": intake_processing_count,
+        "intake_escalated_count": intake_escalated_count,
     }
 
 
@@ -399,6 +437,12 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                 _send_json(self, 200, _registry.get("operators", []))
             elif path == "/agent-pools":
                 _send_json(self, 200, list(_pools))
+            elif path == "/agents/intake-agent-v2":
+                self._get_intake_agent_entry()
+            elif path == "/intake-agent-v2/lifecycle":
+                _send_json(self, 200, list(_intake_lifecycle))
+            elif path == "/intake-agent-v2/metrics":
+                self._get_intake_metrics()
             else:
                 _send_error(self, 404, f"No route: {path}")
 
@@ -499,6 +543,28 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         if severity := params.get("severity"):
             escs = [e for e in escs if e.get("severity") == severity]
         _send_json(self, 200, escs)
+
+    def _get_intake_agent_entry(self) -> None:
+        agents = _registry.get("agents", [])
+        for agent in agents:
+            if agent.get("id") == "intake-agent-v2":
+                _send_json(self, 200, agent)
+                return
+        _send_error(self, 404, "intake-agent-v2 not found in registry")
+
+    def _get_intake_metrics(self) -> None:
+        records = list(_intake_lifecycle)
+        by_stage: dict = {}
+        for r in records:
+            s = r.get("stage", "unknown")
+            by_stage[s] = by_stage.get(s, 0) + 1
+        _send_json(self, 200, {
+            "queue_depth": by_stage.get("queued", 0),
+            "processing_count": by_stage.get("processing", 0),
+            "escalated_count": by_stage.get("escalated", 0),
+            "completed_count": by_stage.get("completed", 0),
+            "total": len(records),
+        })
 
 
 # ---------------------------------------------------------------------------
