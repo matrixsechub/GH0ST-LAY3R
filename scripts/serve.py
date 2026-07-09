@@ -12,17 +12,21 @@ Usage:
     PYTHONPATH=. python3 scripts/serve.py [--host 127.0.0.1] [--port 8000]
 
 Endpoints:
-    POST /intents                   — run engine, GOV-7 header support
-    GET  /hq/health                 — computed HQHealthRecord (includes intake counts)
-    GET  /audit                     — AuditEvent[] (filter: event_type, actor_id, since)
-    GET  /escalations               — EscalationEvent[] (filter: status, severity)
-    GET  /agents                    — agents from registry.yaml
-    GET  /engines                   — engines from registry.yaml
-    GET  /operators                 — operators from registry.yaml
-    GET  /agent-pools               — in-memory AgentPool[] (empty initially)
-    GET  /agents/intake-agent-v2    — registry entry for intake-agent-v2
-    GET  /intake-agent-v2/lifecycle — IntakeLifecycleRecord[] (append-only, since server start)
-    GET  /intake-agent-v2/metrics   — queue depth / processing / escalated / completed counts
+    POST /intents                          — run engine, GOV-7 header support, routing table checked
+    GET  /hq/health                        — computed HQHealthRecord (includes all intake counts)
+    GET  /audit                            — AuditEvent[] (filter: event_type, actor_id, since)
+    GET  /escalations                      — EscalationEvent[] (filter: status, severity)
+    GET  /agents                           — agents from registry.yaml
+    GET  /engines                          — engines from registry.yaml
+    GET  /operators                        — operators from registry.yaml
+    GET  /agent-pools                      — in-memory AgentPool[] (empty initially)
+    GET  /agents/intake-agent-v2           — registry entry for intake-agent-v2
+    GET  /intake-agent-v2/lifecycle        — IntakeLifecycleRecord[] (append-only, since server start)
+    GET  /intake-agent-v2/metrics          — all stage counts (received/validated/queued/processed/…)
+    POST /api/register                     — submit intake; creates IntakeLifecycleRecord stage=received
+    GET  /marketplace                      — lifecycle-aware banner (observer/full/review mode)
+    POST /intake-agent-v2/lifecycle/transition — advance stage: received→validated→queued→processed
+    GET  /cockpit/intake                   — read-only panel stub (status, timeline, last 10 submissions)
 
 GOV-4 note: This file is a bounded, operator-approved relaxation of the
 no-HTTP-server constraint documented in CLAUDE.md. It is not a production
@@ -220,6 +224,64 @@ _sessions: list = []         # OperatorSessionRecord dicts
 _pools: list = []            # AgentPool dicts (empty until created via future endpoint)
 _intake_lifecycle: list = []  # IntakeLifecycleRecord dicts, append-only
 
+# Routing table: seeded at startup; NOT constellation activation (GOV-4 gate).
+# IntakeAgentV2 handles these tags via routing-only mode until GOV-4 is lifted.
+# See IntakeAgentV2.ROUTING_TAGS in agents/constellation.py.
+_routing_table: list = [
+    {
+        "id": "rt-intake-submissions",
+        "type": "routing-entry",
+        "target_engine_id": "ghost-layer-core",
+        "target_agent_id": "intake-agent-v2",
+        "priority": 10,
+        "active": True,
+        "match_tags": ["intake", "register"],
+        "match_capability": "intent-intake",
+        "description": "Route intake submissions and register tags to IntakeAgentV2",
+    },
+    {
+        "id": "rt-access-requests",
+        "type": "routing-entry",
+        "target_engine_id": "ghost-layer-core",
+        "target_agent_id": "intake-agent-v2",
+        "priority": 10,
+        "active": True,
+        "match_tags": ["access-request"],
+        "match_capability": "",
+        "description": "Route access requests to IntakeAgentV2",
+    },
+    {
+        "id": "rt-paywall-transitions",
+        "type": "routing-entry",
+        "target_engine_id": "ghost-layer-core",
+        "target_agent_id": "intake-agent-v2",
+        "priority": 10,
+        "active": True,
+        "match_tags": ["paywall"],
+        "match_capability": "",
+        "description": "Route paywall transitions to IntakeAgentV2",
+    },
+    {
+        "id": "rt-register-transitions",
+        "type": "routing-entry",
+        "target_engine_id": "ghost-layer-core",
+        "target_agent_id": "intake-agent-v2",
+        "priority": 15,
+        "active": True,
+        "match_tags": ["register-transition"],
+        "match_capability": "",
+        "description": "Route register transitions to IntakeAgentV2",
+    },
+]
+
+# Valid stage transitions for the TTX intake flow (received→validated→queued→processed).
+# Escalation transitions are future work — not implemented in this rev.
+_INTAKE_VALID_TRANSITIONS: dict = {
+    "received":  {"validated"},
+    "validated": {"queued"},
+    "queued":    {"processed"},
+}
+
 
 # ---------------------------------------------------------------------------
 # Utility helpers
@@ -244,6 +306,43 @@ def _active_session_id() -> str | None:
         if s.get("ended_at") is None:
             return s["session_id"]
     return None
+
+
+def _check_routing_table(tags: list) -> list:
+    """Return active routing entries whose match_tags intersect the provided tags."""
+    tag_set = set(tags)
+    matched = []
+    for entry in sorted(_routing_table, key=lambda e: e.get("priority", 100)):
+        if not entry.get("active"):
+            continue
+        if tag_set.intersection(entry.get("match_tags", [])):
+            matched.append(entry)
+    return matched
+
+
+def _marketplace_state(latest_stage: str | None) -> dict:
+    """Map the most recent intake lifecycle stage to a marketplace access mode."""
+    if latest_stage in ("validated",):
+        return {
+            "mode": "full",
+            "access": True,
+            "banner": None,
+        }
+    if latest_stage in ("escalated",):
+        return {
+            "mode": "review",
+            "access": False,
+            "banner": (
+                "IntakeAgentV2: Operator Review in Progress — "
+                "Access suspended pending resolution."
+            ),
+        }
+    # received / queued / processed / pending / None → observer
+    return {
+        "mode": "observer",
+        "access": False,
+        "banner": "IntakeAgentV2: Access Pending — You are in Observer Mode.",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -306,9 +405,9 @@ def _compute_hq_health() -> dict:
     open_escalation_count = sum(
         1 for e in _escalations if e.get("status") in ("pending", "acknowledged")
     )
-    intake_queue_depth = sum(1 for r in _intake_lifecycle if r.get("stage") == "queued")
-    intake_processing_count = sum(1 for r in _intake_lifecycle if r.get("stage") == "processing")
-    intake_escalated_count = sum(1 for r in _intake_lifecycle if r.get("stage") == "escalated")
+    def _stage_count(stage: str) -> int:
+        return sum(1 for r in _intake_lifecycle if r.get("stage") == stage)
+
     return {
         "type": "hq-health",
         "timestamp": _now(),
@@ -318,9 +417,14 @@ def _compute_hq_health() -> dict:
         "active_agent_ids": active_agent_ids,
         "open_escalation_count": open_escalation_count,
         "operator_online": _operator_online(),
-        "intake_queue_depth": intake_queue_depth,
-        "intake_processing_count": intake_processing_count,
-        "intake_escalated_count": intake_escalated_count,
+        # pre-TTX intake fields
+        "intake_queue_depth": _stage_count("queued"),
+        "intake_processing_count": _stage_count("processing"),
+        "intake_escalated_count": _stage_count("escalated"),
+        # TTX intake flow fields
+        "intake_received_count": _stage_count("received"),
+        "intake_validated_count": _stage_count("validated"),
+        "intake_processed_count": _stage_count("processed"),
     }
 
 
@@ -443,6 +547,10 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                 _send_json(self, 200, list(_intake_lifecycle))
             elif path == "/intake-agent-v2/metrics":
                 self._get_intake_metrics()
+            elif path == "/marketplace":
+                self._get_marketplace(params)
+            elif path == "/cockpit/intake":
+                self._get_cockpit_intake()
             else:
                 _send_error(self, 404, f"No route: {path}")
 
@@ -460,6 +568,10 @@ class GhostHQHandler(BaseHTTPRequestHandler):
 
         if path == "/intents":
             self._post_intents(body)
+        elif path == "/api/register":
+            self._post_register(body)
+        elif path == "/intake-agent-v2/lifecycle/transition":
+            self._post_lifecycle_transition(body)
         else:
             _send_error(self, 404, f"No route: {path}")
 
@@ -511,13 +623,24 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                     payload={"rule": "GOV-7", "source": source},
                 )
 
+            # Routing table check — advisory, not constellation activation.
+            routing_matches = _check_routing_table(request_tags)
+            routing_info = [
+                {"entry_id": e["id"], "target_agent_id": e.get("target_agent_id")}
+                for e in routing_matches
+            ]
+
             _write_audit(
                 "intent.submitted",
                 actor_id=op_id if gov7_active else source,
                 actor_type="operator" if gov7_active else "system",
                 target_id=intent_id,
                 target_type="intent",
-                payload={"source": source, "gov7_active": gov7_active},
+                payload={
+                    "source": source,
+                    "gov7_active": gov7_active,
+                    "routing_matches": routing_info,
+                },
             )
 
             # GOV-3: raise escalation on high-risk tags or critically high volatility.
@@ -552,6 +675,174 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                 return
         _send_error(self, 404, "intake-agent-v2 not found in registry")
 
+    def _post_register(self, body: dict) -> None:
+        """
+        POST /api/register — public intake submission entry point.
+        Creates an IntakeLifecycleRecord at stage 'received', logs an
+        intake.stage_changed AuditEvent, and returns the record.
+        No auth — this is the unauthenticated public → intake boundary.
+        """
+        source = body.get("source", "public")
+        raw = body.get("raw", "")
+        intent_id = body.get("intent_id") or str(uuid.uuid4())
+        notes = body.get("notes", "")
+
+        if not raw and not body:
+            _send_error(self, 400, "'raw' or a non-empty body is required")
+            return
+
+        now = _now()
+        record: dict = {
+            "id": str(uuid.uuid4()),
+            "type": "intake-lifecycle",
+            "intent_id": intent_id,
+            "stage": "received",
+            "created_at": now,
+            "updated_at": now,
+            "source": source,
+            "operator_action": None,
+            "operator_notes": notes,
+            "resolved_at": None,
+        }
+
+        with _lock:
+            _intake_lifecycle.append(record)
+            _write_audit(
+                "intake.stage_changed",
+                actor_id=source,
+                actor_type="system",
+                target_id=record["id"],
+                target_type="intake-lifecycle",
+                payload={"intent_id": intent_id, "stage": "received", "from_stage": None},
+            )
+
+        _send_json(self, 201, {
+            "lifecycle": record,
+            "marketplace": _marketplace_state("received"),
+        })
+
+    def _get_marketplace(self, params: dict) -> None:
+        """
+        GET /marketplace — return lifecycle-aware marketplace access state.
+        No auth: returns state based on the most recent IntakeLifecycleRecord.
+        If no records exist, returns observer mode (default).
+        """
+        with _lock:
+            records = list(_intake_lifecycle)
+
+        latest_stage: str | None = None
+        if records:
+            latest_stage = records[-1].get("stage")
+
+        state = _marketplace_state(latest_stage)
+        _send_json(self, 200, {
+            "type": "marketplace-state",
+            "mode": state["mode"],
+            "access": state["access"],
+            "banner": state["banner"],
+            "latest_intake_stage": latest_stage,
+            "total_submissions": len(records),
+        })
+
+    def _post_lifecycle_transition(self, body: dict) -> None:
+        """
+        POST /intake-agent-v2/lifecycle/transition
+        Body: {"lifecycle_id": "...", "to_stage": "validated", "notes": "..."}
+        Validates the transition against _INTAKE_VALID_TRANSITIONS and
+        appends a new IntakeLifecycleRecord (append-only; does not mutate).
+        """
+        lifecycle_id = body.get("lifecycle_id", "")
+        to_stage = body.get("to_stage", "")
+        notes = body.get("notes", "")
+
+        if not lifecycle_id or not to_stage:
+            _send_error(self, 400, "'lifecycle_id' and 'to_stage' are required")
+            return
+
+        with _lock:
+            source_record = next(
+                (r for r in _intake_lifecycle if r.get("id") == lifecycle_id), None
+            )
+            if source_record is None:
+                _send_error(self, 404, f"No lifecycle record: {lifecycle_id}")
+                return
+
+            from_stage = source_record.get("stage", "")
+            allowed = _INTAKE_VALID_TRANSITIONS.get(from_stage, set())
+            if to_stage not in allowed:
+                _send_error(
+                    self, 422,
+                    f"Transition '{from_stage}' → '{to_stage}' not allowed. "
+                    f"Valid next stages: {sorted(allowed) or 'none (terminal)'}",
+                )
+                return
+
+            now = _now()
+            new_record: dict = {
+                "id": str(uuid.uuid4()),
+                "type": "intake-lifecycle",
+                "intent_id": source_record.get("intent_id", ""),
+                "stage": to_stage,
+                "created_at": now,
+                "updated_at": now,
+                "source": source_record.get("source", ""),
+                "operator_action": None,
+                "operator_notes": notes,
+                "resolved_at": now if to_stage == "processed" else None,
+            }
+            _intake_lifecycle.append(new_record)
+            _write_audit(
+                "intake.stage_changed",
+                actor_id="system",
+                actor_type="system",
+                target_id=new_record["id"],
+                target_type="intake-lifecycle",
+                payload={
+                    "intent_id": new_record["intent_id"],
+                    "from_stage": from_stage,
+                    "stage": to_stage,
+                    "previous_record_id": lifecycle_id,
+                },
+            )
+
+        _send_json(self, 200, {
+            "previous": source_record,
+            "current": new_record,
+            "marketplace": _marketplace_state(to_stage),
+        })
+
+    def _get_cockpit_intake(self) -> None:
+        """
+        GET /cockpit/intake — read-only operator cockpit panel stub.
+        Returns: agent status, lifecycle timeline (all records), last 10 submissions.
+        Read-only until GOV-4 lift — no write endpoints exposed here.
+        """
+        with _lock:
+            records = list(_intake_lifecycle)
+            metrics = {}
+            for r in records:
+                s = r.get("stage", "unknown")
+                metrics[s] = metrics.get(s, 0) + 1
+
+        agent_entry = next(
+            (a for a in _registry.get("agents", []) if a.get("id") == "intake-agent-v2"),
+            {"id": "intake-agent-v2", "status": "not-in-registry"},
+        )
+
+        _send_json(self, 200, {
+            "type": "cockpit-panel",
+            "panel": "intake-agent-v2",
+            "agent_status": agent_entry.get("status", "unknown"),
+            "gov4_status": "routing-active; constellation activation pending operator approval",
+            "routing_table_entries": len(_routing_table),
+            "stage_counts": metrics,
+            "lifecycle_timeline": records,
+            "last_10_submissions": [
+                r for r in records if r.get("stage") == "received"
+            ][-10:],
+            "note": "Read-only until GOV-4 lift. Operator actions available after promotion.",
+        })
+
     def _get_intake_metrics(self) -> None:
         records = list(_intake_lifecycle)
         by_stage: dict = {}
@@ -559,7 +850,12 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             s = r.get("stage", "unknown")
             by_stage[s] = by_stage.get(s, 0) + 1
         _send_json(self, 200, {
-            "queue_depth": by_stage.get("queued", 0),
+            # TTX flow counts
+            "received_count": by_stage.get("received", 0),
+            "validated_count": by_stage.get("validated", 0),
+            "queued_count": by_stage.get("queued", 0),
+            "processed_count": by_stage.get("processed", 0),
+            # legacy / future counts
             "processing_count": by_stage.get("processing", 0),
             "escalated_count": by_stage.get("escalated", 0),
             "completed_count": by_stage.get("completed", 0),

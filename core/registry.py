@@ -104,7 +104,17 @@ EngineHealthStatus = Literal["healthy", "degraded", "unavailable"]
 AuditActorType = Literal["operator", "agent", "system"]
 
 # Intake Agent v2 lifecycle types (see docs/intake-agent-v2-integration-plan.md)
-IntakeLifecycleStage = Literal["queued", "processing", "escalated", "completed"]
+# Stage machine (TTX flow): received -> validated -> queued -> processed
+#                           any open stage -> escalated (future; not implemented in this rev)
+IntakeLifecycleStage = Literal[
+    "received",    # submission acknowledged, awaiting validation
+    "validated",   # passed initial checks; cleared for queue entry
+    "queued",      # waiting in processing queue
+    "processing",  # active evaluation in progress (pre-TTX stage, preserved)
+    "processed",   # successfully completed the intake flow
+    "escalated",   # routed to operator review (future; schema only in this rev)
+    "completed",   # fully closed by operator action (pre-TTX stage, preserved)
+]
 IntakeOperatorAction = Literal["approve", "escalate", "close", "reassign", "annotate"]
 
 
@@ -286,6 +296,9 @@ class HQHealthRecord:
     intake_queue_depth: int = 0
     intake_processing_count: int = 0
     intake_escalated_count: int = 0
+    intake_received_count: int = 0
+    intake_validated_count: int = 0
+    intake_processed_count: int = 0
     type: Literal["hq-health"] = "hq-health"
 
 
@@ -298,7 +311,8 @@ class IntakeLifecycleRecord:
     stage transition produces a new record rather than mutating an existing
     one. See docs/intake-agent-v2-integration-plan.md.
 
-    Stage machine: queued -> processing -> escalated | completed
+    Stage machine (TTX flow): received -> validated -> queued -> processed
+                              (legacy stages processing/completed preserved for schema compat)
     """
 
     id: str

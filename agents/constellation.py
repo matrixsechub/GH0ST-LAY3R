@@ -174,10 +174,17 @@ class IntakeAgentV2:
 
     GOV-4 gate: this class is defined here but NOT registered in
     create_default_engine() — that registration requires operator approval.
+    Routing is active (serve.py _routing_table) without constellation activation.
     Status: experimental (see agents/registry.yaml id: intake-agent-v2).
     See docs/intake-agent-v2-integration-plan.md for the full plan.
+
+    TTX flow:  received -> validated -> queued -> processed
+    Routing tags handled by serve.py _routing_table (see ROUTING_TAGS below).
     """
     name: str = "IntakeAgentV2"
+    # Tags that route to this agent via the serve.py routing table (GOV-4 routing-only mode).
+    # The routing table in serve.py references these at startup.
+    ROUTING_TAGS: tuple = ("intake", "register", "access-request", "paywall", "register-transition")
     _ESCALATION_TAGS: tuple = ("high-risk", "escalate", "critical")
 
     def supports(self, intent: IntentVector, state: SubstrateState) -> bool:
@@ -191,7 +198,7 @@ class IntakeAgentV2:
             operator_action_required = True
             available_actions = ["escalate", "close", "reassign", "annotate"]
         else:
-            stage = "processing"
+            stage = "received"   # TTX initial stage; serve.py advances through transitions
             operator_action_required = False
             available_actions = ["approve", "close", "annotate"]
 
