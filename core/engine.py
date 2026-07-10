@@ -25,6 +25,9 @@ from core.substrate import SubstrateState, SubstrateIngestion
 from core.physics import DefaultDominionPhysics
 from core.oversoul import DefaultOversoul, OversoulConfig
 from core.output import OutputReactor
+# ADVANCEMENT: Pass 2 diagnostics — core.diagnostics is a low-level module that
+# never imports core.engine, so this import cannot create a cycle.
+from core.diagnostics import run_diagnostics
 from agents.constellation import (
     AgentConstellation,
     AdversarialIntelAgent,
@@ -94,7 +97,13 @@ class GhostLayerEngine:
     # Public API
     # ------------------------------------------------------------------
 
-    def run(self, raw: Any, *, source: str = "cli") -> Dict[str, Any]:
+    def run(
+        self,
+        raw: Any,
+        *,
+        source: str = "cli",
+        include_diagnostics: bool = False,
+    ) -> Dict[str, Any]:
         """
         Single engine cycle:
 
@@ -105,6 +114,11 @@ class GhostLayerEngine:
         5. Fuse via Oversoul
         6. Optional recursion
         7. Emit final output envelope
+
+        # ADVANCEMENT: Pass 2 diagnostics
+        ``include_diagnostics`` defaults to False, so the default output shape is
+        unchanged (only the Pass 1 additive fields). When True, a read-only
+        ``diagnostics`` block from run_diagnostics() is attached to the envelope.
         """
         # ADVANCEMENT: Engine evolution — measure pipeline wall-time for telemetry.
         start = time.perf_counter()
@@ -157,6 +171,11 @@ class GhostLayerEngine:
                 recursion_depth=recursion_depth,
                 duration_ms=duration_ms,
             )
+
+        # ADVANCEMENT: Pass 2 diagnostics — opt-in, additive, non-mutating over
+        # the pipeline result. Computed on the built envelope, then attached.
+        if include_diagnostics:
+            final["diagnostics"] = run_diagnostics(final)
 
         logger.info(f"[ENGINE] Run complete — intent={intent.id}")
         return final
