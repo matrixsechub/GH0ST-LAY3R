@@ -29,6 +29,9 @@ from agents.constellation import (
     AdversarialIntelAgent,
     ContainmentAgent,
     OperatorDoctrineAgent,
+    # ADVANCEMENT: Engine evolution — new conditionally-activating agents.
+    PredictiveAgent,
+    StabilityAgent,
 )
 
 # ---------------------------------------------------------------------------
@@ -178,6 +181,10 @@ def create_default_engine() -> GhostLayerEngine:
             AdversarialIntelAgent(),
             ContainmentAgent(),
             OperatorDoctrineAgent(),
+            # ADVANCEMENT: Engine evolution — registered but conditionally active,
+            # so the default (low-volatility) demo output is unchanged.
+            PredictiveAgent(),
+            StabilityAgent(),
         ]
     )
 
