@@ -11,13 +11,13 @@ Responsibilities:
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Dict, TYPE_CHECKING
+from typing import Any, Dict, Optional
 import time
 
 from core.substrate import SubstrateState
-
-if TYPE_CHECKING:
-    from core.engine import IntentVector  # where IntentVector currently lives
+# ADVANCEMENT: Engine evolution — shared type imported from the leaf module
+# core.types, so this module no longer depends on core.engine (cycle removed).
+from core.types import IntentVector, ENGINE_VERSION
 
 
 @dataclass
@@ -33,6 +33,8 @@ class OutputEnvelope:
     payload: Dict[str, Any]
     timestamp: float = field(default_factory=lambda: time.time())
     meta: Dict[str, Any] = field(default_factory=dict)
+    # ADVANCEMENT: Engine evolution — additive top-level version stamp.
+    engine_version: str = ENGINE_VERSION
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -44,6 +46,9 @@ class OutputEnvelope:
             "payload": self.payload,
             "timestamp": self.timestamp,
             "meta": self.meta,
+            # ADVANCEMENT: Behavior preserved — existing keys are untouched;
+            # engine_version is a new additive field.
+            "engine_version": self.engine_version,
         }
 
 
@@ -65,10 +70,21 @@ class OutputReactor:
         intent: IntentVector,
         state: SubstrateState,
         fused_output: Dict[str, Any],
+        *,
+        extra_meta: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Build and return the final output envelope as a dict.
+
+        # ADVANCEMENT: Behavior preserved — the pre-existing ``intent_tags``
+        # meta entry is always present; ``extra_meta`` only adds new keys.
         """
+        meta: Dict[str, Any] = {
+            "intent_tags": intent.tags,
+        }
+        if extra_meta:
+            meta.update(extra_meta)
+
         envelope = OutputEnvelope(
             intent_id=intent.id,
             source=intent.source,
@@ -76,8 +92,6 @@ class OutputReactor:
             spectral_density=state.spectral_density,
             volatility=state.volatility,
             payload=fused_output,
-            meta={
-                "intent_tags": intent.tags,
-            },
+            meta=meta,
         )
         return envelope.to_dict()

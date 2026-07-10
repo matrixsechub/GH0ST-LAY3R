@@ -9,12 +9,12 @@ Defines the "laws" that govern how the substrate evolves:
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Protocol, TYPE_CHECKING
+from typing import Protocol
 
 from core.substrate import SubstrateState
-
-if TYPE_CHECKING:
-    from core.engine import IntentVector  # if IntentVector lives in engine.py
+# ADVANCEMENT: Engine evolution — shared type imported from the leaf module
+# core.types, so this module no longer depends on core.engine (cycle removed).
+from core.types import IntentVector, clamp01
 
 
 class DominionPhysics(Protocol):
@@ -50,15 +50,19 @@ class DefaultDominionPhysics:
         tags = set(intent.tags)
 
         # Volatility shaping
+        # ADVANCEMENT: Behavior preserved — clamp01() centralizes the [0, 1]
+        # invariant. For in-range state the result is identical to the previous
+        # one-sided min()/max() clamps (this is a safety refactor, not a math
+        # change), and it hard-guarantees volatility can never escalate past 1.0.
         if tags.intersection(self.escalation_tags):
-            state.volatility = min(1.0, state.volatility + self.escalation_boost)
+            state.volatility = clamp01(state.volatility + self.escalation_boost)
         else:
-            state.volatility = max(0.0, state.volatility - self.damping_factor)
+            state.volatility = clamp01(state.volatility - self.damping_factor)
 
         # Spectral density shaping (very lightweight)
         if "focus" in tags:
-            state.spectral_density = min(1.0, state.spectral_density + self.focus_gain)
+            state.spectral_density = clamp01(state.spectral_density + self.focus_gain)
         elif "diffuse" in tags:
-            state.spectral_density = max(0.0, state.spectral_density - self.diffusion_loss)
+            state.spectral_density = clamp01(state.spectral_density - self.diffusion_loss)
 
         return state

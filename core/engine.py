@@ -15,8 +15,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 import logging
+import time
 import uuid
 
+# ADVANCEMENT: Engine evolution — shared domain types now live in the leaf
+# module core.types, giving a clean one-directional import DAG.
+from core.types import OperatorAxis, IntentVector, ENGINE_VERSION
 from core.substrate import SubstrateState, SubstrateIngestion
 from core.physics import DefaultDominionPhysics
 from core.oversoul import DefaultOversoul, OversoulConfig
@@ -26,6 +30,9 @@ from agents.constellation import (
     AdversarialIntelAgent,
     ContainmentAgent,
     OperatorDoctrineAgent,
+    # ADVANCEMENT: Engine evolution — new conditionally-activating agents.
+    PredictiveAgent,
+    StabilityAgent,
 )
 
 # ---------------------------------------------------------------------------
@@ -46,21 +53,9 @@ logger.setLevel(logging.INFO)
 # ---------------------------------------------------------------------------
 # Core Data Models
 # ---------------------------------------------------------------------------
-
-@dataclass
-class OperatorAxis:
-    alignment: str = "operator-defensive"
-    doctrine: str = "bounded-escalation"
-    signature: str = "MatrixSecHub"
-
-
-@dataclass
-class IntentVector:
-    id: str
-    source: str
-    description: str
-    tags: List[str] = field(default_factory=list)
-
+# ADVANCEMENT: Behavior preserved — OperatorAxis and IntentVector are now
+# imported from core.types (identical dataclasses); re-exported above so any
+# `from core.engine import IntentVector` call site keeps working.
 
 @dataclass
 class EngineConfig:
@@ -111,6 +106,9 @@ class GhostLayerEngine:
         6. Optional recursion
         7. Emit final output envelope
         """
+        # ADVANCEMENT: Engine evolution — measure pipeline wall-time for telemetry.
+        start = time.perf_counter()
+
         intent = self._build_intent(raw, source)
         logger.info(f"[ENGINE] Run start — intent={intent.id} source={source}")
 
@@ -135,11 +133,30 @@ class GhostLayerEngine:
                 max_depth=self.config.max_recursion,
             )
 
+        # ADVANCEMENT: Engine evolution — additive envelope metadata. Existing
+        # envelope keys are untouched; these enrich operator observability.
+        active_agents = [o["agent"] for o in agent_outputs]
+        recursion_depth = len(fused.get("recursion_trace", []))
+        duration_ms = round((time.perf_counter() - start) * 1000.0, 3)
+        extra_meta: Dict[str, Any] = {
+            "recursion_depth": recursion_depth,
+            "active_agents": active_agents,
+            "ingestion_metrics": self._ingestion_metrics(state),
+            "duration_ms": duration_ms,
+        }
+
         # Output reactor
-        final = self.output_reactor.emit(intent, state, fused)
+        final = self.output_reactor.emit(intent, state, fused, extra_meta=extra_meta)
 
         if self.config.telemetry:
-            self._telemetry(intent, state, agent_outputs, final)
+            self._telemetry(
+                intent,
+                state,
+                agent_outputs,
+                final,
+                recursion_depth=recursion_depth,
+                duration_ms=duration_ms,
+            )
 
         logger.info(f"[ENGINE] Run complete — intent={intent.id}")
         return final
@@ -156,15 +173,34 @@ class GhostLayerEngine:
             tags=["ghost-layer", "operator"],
         )
 
+    # ADVANCEMENT: Engine evolution — derive lightweight ingestion metrics from
+    # the normalized text (mirrors SubstrateIngestion tokenization) without
+    # altering the substrate's spectral/volatility math.
+    def _ingestion_metrics(self, state: SubstrateState) -> Dict[str, int]:
+        normalized = state.context.get("normalized", "")
+        tokens = normalized.split() if isinstance(normalized, str) else []
+        return {
+            "token_count": len(tokens),
+            "unique_tokens": len(set(tokens)),
+        }
+
     def _telemetry(
         self,
         intent: IntentVector,
         state: SubstrateState,
         agent_outputs: List[Dict[str, Any]],
         final: Dict[str, Any],
+        *,
+        recursion_depth: int = 0,
+        duration_ms: float = 0.0,
     ) -> None:
+        # ADVANCEMENT: Engine evolution — richer telemetry: version, active agent
+        # names, recursion depth, and duration; original fields are retained.
+        active_agents = [o["agent"] for o in agent_outputs]
         logger.info(
-            f"[TELEMETRY] intent={intent.id} agents={len(agent_outputs)} "
+            f"[TELEMETRY] intent={intent.id} version={ENGINE_VERSION} "
+            f"agents={len(agent_outputs)} active={active_agents} "
+            f"recursion_depth={recursion_depth} duration_ms={duration_ms} "
             f"spectral={state.spectral_density:.3f} volatility={state.volatility:.3f}"
         )
 
@@ -187,6 +223,10 @@ def create_default_engine() -> GhostLayerEngine:
             AdversarialIntelAgent(),
             ContainmentAgent(),
             OperatorDoctrineAgent(),
+            # ADVANCEMENT: Engine evolution — registered but conditionally active,
+            # so the default (low-volatility) demo output is unchanged.
+            PredictiveAgent(),
+            StabilityAgent(),
         ]
     )
 
