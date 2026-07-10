@@ -12,12 +12,12 @@ This is intentionally lightweight but extensible.
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, TYPE_CHECKING
+from typing import Any, Dict, List
 
 from core.substrate import SubstrateState
-
-if TYPE_CHECKING:
-    from core.engine import IntentVector  # if IntentVector lives in engine.py
+# ADVANCEMENT: Engine evolution — shared type imported from the leaf module
+# core.types, so this module no longer depends on core.engine (cycle removed).
+from core.types import IntentVector
 
 
 @dataclass

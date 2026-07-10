@@ -9,12 +9,12 @@ Defines the "laws" that govern how the substrate evolves:
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Protocol, TYPE_CHECKING
+from typing import Protocol
 
 from core.substrate import SubstrateState
-
-if TYPE_CHECKING:
-    from core.engine import IntentVector  # if IntentVector lives in engine.py
+# ADVANCEMENT: Engine evolution — shared type imported from the leaf module
+# core.types, so this module no longer depends on core.engine (cycle removed).
+from core.types import IntentVector
 
 
 class DominionPhysics(Protocol):

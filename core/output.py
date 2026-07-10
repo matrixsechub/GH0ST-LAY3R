@@ -11,13 +11,13 @@ Responsibilities:
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Dict, TYPE_CHECKING
+from typing import Any, Dict
 import time
 
 from core.substrate import SubstrateState
-
-if TYPE_CHECKING:
-    from core.engine import IntentVector  # where IntentVector currently lives
+# ADVANCEMENT: Engine evolution — shared type imported from the leaf module
+# core.types, so this module no longer depends on core.engine (cycle removed).
+from core.types import IntentVector
 
 
 @dataclass

@@ -17,6 +17,9 @@ from typing import Any, Dict, List
 import logging
 import uuid
 
+# ADVANCEMENT: Engine evolution — shared domain types now live in the leaf
+# module core.types, giving a clean one-directional import DAG.
+from core.types import OperatorAxis, IntentVector
 from core.substrate import SubstrateState, SubstrateIngestion
 from core.physics import DefaultDominionPhysics
 from core.oversoul import DefaultOversoul, OversoulConfig
@@ -46,21 +49,9 @@ logger.setLevel(logging.INFO)
 # ---------------------------------------------------------------------------
 # Core Data Models
 # ---------------------------------------------------------------------------
-
-@dataclass
-class OperatorAxis:
-    alignment: str = "operator-defensive"
-    doctrine: str = "bounded-escalation"
-    signature: str = "MatrixSecHub"
-
-
-@dataclass
-class IntentVector:
-    id: str
-    source: str
-    description: str
-    tags: List[str] = field(default_factory=list)
-
+# ADVANCEMENT: Behavior preserved — OperatorAxis and IntentVector are now
+# imported from core.types (identical dataclasses); re-exported above so any
+# `from core.engine import IntentVector` call site keeps working.
 
 @dataclass
 class EngineConfig:
