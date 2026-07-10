@@ -134,3 +134,36 @@ python3 -m py_compile core/*.py agents/*.py scripts/*.py integrations/*.py
 - Malformed command returns `status: error` with an `errors` list.
 - Default demo and golden checks remain backward-compatible.
 - Runtime pipeline order preserved: `substrate → physics → agents → oversoul → output`.
+
+---
+
+## Pass 4: Local Engine HTTP Service
+
+Pass 4 adds a stdlib-only local HTTP adapter (`integrations/http_service.py`)
+that exposes Pass 3 ecosystem contracts over localhost JSON endpoints.
+
+### Role
+
+- The service acts as the **adapter boundary** between non-Python ecosystem
+  components and the Ghost Layer engine.
+- Node and backend systems should call this service **locally**
+  (`127.0.0.1:8765` by default).
+- The Cloudflare Worker (`mshops-public`) should **not** call this service
+  directly until a proper bridge/proxy is available.
+- **marketplace-tracking-backend** is the next intended consumer — implement a
+  local Ghost client that POSTs ecosystem requests to `/run`.
+
+### Endpoints
+
+`GET /health`, `GET /contracts`, `POST /run`, `POST /run-diagnostics`,
+`POST /validate-request`, `POST /validate-command`.
+
+See `docs/LOCAL_ENGINE_SERVICE.md` for full route documentation.
+
+### Verification (Pass 4)
+
+Add to the Pass 3 verification list:
+
+```bash
+python -m scripts.check_local_service
+```
