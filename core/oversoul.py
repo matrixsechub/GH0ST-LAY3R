@@ -17,7 +17,7 @@ from typing import Any, Dict, List
 from core.substrate import SubstrateState
 # ADVANCEMENT: Engine evolution — shared type imported from the leaf module
 # core.types, so this module no longer depends on core.engine (cycle removed).
-from core.types import IntentVector
+from core.types import IntentVector, clamp01
 
 
 @dataclass
@@ -103,31 +103,37 @@ class DefaultOversoul(Oversoul):
         - Adds a new layer of meta‑context
         - Slightly adjusts spectral density to simulate "refinement"
         - Stops at max_depth
+
+        # ADVANCEMENT: Behavior preserved
+        Reimplemented from Python recursion to a bounded iterative loop. The
+        emitted ``recursion_trace`` entries, the ``+0.01`` clamped refinement,
+        and the terminal ``recursion_complete`` marker are byte-for-byte
+        identical to the previous recursive implementation, but iteration
+        guarantees deterministic termination and cannot exhaust Python's call
+        stack even for a very large ``max_depth``. A negative ``max_depth`` is
+        guarded to a no-op (zero cycles), matching the old ``depth >= max_depth``
+        short-circuit.
         """
         if not self.config.enable_recursion:
             return fused
 
-        if depth >= max_depth:
-            fused["recursion_complete"] = True
-            return fused
+        # ADVANCEMENT: Behavior preserved — guard non-positive bounds; range()
+        # naturally yields zero cycles, exactly like the old base-case return.
+        bounded_max = max_depth if max_depth > 0 else 0
 
-        # Add a recursion layer
-        fused.setdefault("recursion_trace", []).append(
-            {
-                "depth": depth,
-                "spectral_density": state.spectral_density,
-                "volatility": state.volatility,
-            }
-        )
+        # ADVANCEMENT: Behavior preserved — the "recursion_trace" key is created
+        # lazily on first append (as before), so a zero-cycle run yields only
+        # the terminal marker with no empty trace list.
+        for current_depth in range(depth, bounded_max):
+            fused.setdefault("recursion_trace", []).append(
+                {
+                    "depth": current_depth,
+                    "spectral_density": state.spectral_density,
+                    "volatility": state.volatility,
+                }
+            )
+            # Simulate refinement (clamped to the [0, 1] invariant).
+            state.spectral_density = clamp01(state.spectral_density + 0.01)
 
-        # Simulate refinement
-        state.spectral_density = min(1.0, state.spectral_density + 0.01)
-
-        # Recurse deeper
-        return self.recurse(
-            intent=intent,
-            state=state,
-            fused=fused,
-            depth=depth + 1,
-            max_depth=max_depth,
-        )
+        fused["recursion_complete"] = True
+        return fused
