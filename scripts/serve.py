@@ -417,14 +417,16 @@ def _compute_hq_health() -> dict:
         "active_agent_ids": active_agent_ids,
         "open_escalation_count": open_escalation_count,
         "operator_online": _operator_online(),
-        # pre-TTX intake fields
-        "intake_queue_depth": _stage_count("queued"),
+        # pre-TTX intake fields (preserved for compat)
+        "intake_queue_depth": _stage_count("queued"),   # alias of intake_queued_count
         "intake_processing_count": _stage_count("processing"),
         "intake_escalated_count": _stage_count("escalated"),
         # TTX intake flow fields
         "intake_received_count": _stage_count("received"),
         "intake_validated_count": _stage_count("validated"),
+        "intake_queued_count": _stage_count("queued"),
         "intake_processed_count": _stage_count("processed"),
+        "intake_completed_count": _stage_count("completed"),
     }
 
 
@@ -726,9 +728,9 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         GET /marketplace — return lifecycle-aware marketplace access state.
         No auth: returns state based on the most recent IntakeLifecycleRecord.
         If no records exist, returns observer mode (default).
+        Called under do_GET's _lock — do not re-acquire.
         """
-        with _lock:
-            records = list(_intake_lifecycle)
+        records = list(_intake_lifecycle)
 
         latest_stage: str | None = None
         if records:
@@ -816,13 +818,13 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         GET /cockpit/intake — read-only operator cockpit panel stub.
         Returns: agent status, lifecycle timeline (all records), last 10 submissions.
         Read-only until GOV-4 lift — no write endpoints exposed here.
+        Called under do_GET's _lock — do not re-acquire.
         """
-        with _lock:
-            records = list(_intake_lifecycle)
-            metrics = {}
-            for r in records:
-                s = r.get("stage", "unknown")
-                metrics[s] = metrics.get(s, 0) + 1
+        records = list(_intake_lifecycle)
+        metrics = {}
+        for r in records:
+            s = r.get("stage", "unknown")
+            metrics[s] = metrics.get(s, 0) + 1
 
         agent_entry = next(
             (a for a in _registry.get("agents", []) if a.get("id") == "intake-agent-v2"),

@@ -298,7 +298,9 @@ class HQHealthRecord:
     intake_escalated_count: int = 0
     intake_received_count: int = 0
     intake_validated_count: int = 0
+    intake_queued_count: int = 0
     intake_processed_count: int = 0
+    intake_completed_count: int = 0
     type: Literal["hq-health"] = "hq-health"
 
 
