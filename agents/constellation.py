@@ -14,10 +14,12 @@ Agents are modular intelligence operators that:
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Any, Dict, List, Protocol
+from typing import Any, Dict, List, Protocol, TYPE_CHECKING
 
 from core.substrate import SubstrateState
-from core.engine import IntentVector
+
+if TYPE_CHECKING:
+    from core.engine import IntentVector
 
 
 # ---------------------------------------------------------------------------
