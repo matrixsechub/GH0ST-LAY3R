@@ -1,3 +1,7 @@
+> 📡 **GitHub SOP** — All repo operations governed by the [MSH-OPS GitHub SOP](https://app.clickup.com/9017787639/docs/8cr117q-3237). Branch strategy, PR protocol, and merge rules apply.
+
+---
+
 <!-- GHOST LAYER STUDIO — SYSTEM INITIATION -->
 
 <div align="center">
@@ -115,110 +119,6 @@ ghost-layer-studio/
 
 ---
 
-## 🖼 System Diagram Atlas  
-*(All images below will display as long as they exist in `IMAGES/`)*
-
----
-
-## 🧩 Core Maps
-
-<p align="center">
-  <img src="IMAGES/matrixsechub_core.png" width="100%">
-  <img src="IMAGES/ethical_oversight.png" width="100%">
-  <img src="IMAGES/crisis_command_core.png" width="100%">
-  <img src="IMAGES/escalation_logic.png" width="100%">
-  <img src="IMAGES/operator_authority_ladder.png" width="100%">
-</p>
-
----
-
-## ⚔️ Adversarial & Security Layers
-
-<p align="center">
-  <img src="IMAGES/adversarial_intelligence_core.png" width="100%">
-  <img src="IMAGES/containment_playbook_map.png" width="100%">
-  <img src="IMAGES/operator_readiness_matrix.png" width="100%">
-  <img src="IMAGES/red_team_engagement_loop.png" width="100%">
-  <img src="IMAGES/incident_response_chain.png" width="100%">
-  <img src="IMAGES/security_posture_diagram.png" width="100%">
-  <img src="IMAGES/threat_surface_map.png" width="100%">
-</p>
-
----
-
-## 🧠 Operator Cognition & Workflow
-
-<p align="center">
-  <img src="IMAGES/operator_doctrine_map.png" width="100%">
-  <img src="IMAGES/operator_cognitive_loop.png" width="100%">
-  <img src="IMAGES/operator_workflow_map.png" width="100%">
-</p>
-
----
-
-## 🌐 Continuity & Integration
-
-<p align="center">
-  <img src="IMAGES/continuity_resilience_map.png" width="100%">
-  <img src="IMAGES/risk_escalation_matrix.png" width="100%">
-  <img src="IMAGES/ecosystem_integration_map.png" width="100%">
-  <img src="IMAGES/signal_flow_map.png" width="100%">
-  <img src="IMAGES/data_provenance_chain.png" width="100%">
-</p>
-
----
-
-## 🜂 Recursive Intelligence & Oversoul
-
-<p align="center">
-  <img src="IMAGES/recursive_intelligence_loop.png" width="100%">
-  <img src="IMAGES/oversoul_substrate.png" width="100%">
-  <img src="IMAGES/agent_constellation.png" width="100%">
-</p>
-
----
-
-## 🎬 Melius Challenge Context
-
-This build is designed as a **showpiece** for the **#MeliusChallenge**:
-
-- 🌌 Multi‑node, multi‑agent architecture  
-- 🖼 Visual system maps instead of plain text  
-- 🧠 Clear operator identity and doctrine  
-- 🎞 Cinematic intro sequence  
-- 🧩 Cohesive mythic cosmology  
-
-This README is the **narrative spine** for the submission.
-
----
-
-## 🧬 Operator Notes
-
-Ghost Layer Studio is built around:
-
-- 🧲 **Signal over noise**  
-- 🌀 **Recursion**  
-- 🎞 **Cinematic escalation**  
-- 🛡 **Invariance**  
-- 🧱 **Substrate thinking**  
-
-Every fragment becomes fuel.  
-Every dead idea becomes a ghost.  
-Every ghost gets a layer.
-
----
-
 ## 📄 License
 
 MIT License.
-
----
-
-<div align="center">
-
-**SYSTEM INITIATION COMPLETE**  
-**TRANSMISSION DEPLOYED**  
-
-Ghost Layer Studio evolves as you evolve.
-
-</div>
