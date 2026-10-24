@@ -12,12 +12,12 @@ This is the primary runtime entrypoint for Ghost Layer Studio.
 """
 
 from __future__ import annotations
-from dataclasses import dataclass, field
 from typing import Any, Dict, List
 import logging
 import uuid
 
 from core.substrate import SubstrateState, SubstrateIngestion
+from core.models import EngineConfig, IntentVector
 from core.physics import DefaultDominionPhysics
 from core.oversoul import DefaultOversoul, OversoulConfig
 from core.output import OutputReactor
@@ -41,33 +41,6 @@ if not logger.handlers:
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 logger.setLevel(logging.INFO)
-
-
-# ---------------------------------------------------------------------------
-# Core Data Models
-# ---------------------------------------------------------------------------
-
-@dataclass
-class OperatorAxis:
-    alignment: str = "operator-defensive"
-    doctrine: str = "bounded-escalation"
-    signature: str = "MatrixSecHub"
-
-
-@dataclass
-class IntentVector:
-    id: str
-    source: str
-    description: str
-    tags: List[str] = field(default_factory=list)
-
-
-@dataclass
-class EngineConfig:
-    max_recursion: int = 3
-    enable_recursion: bool = True
-    telemetry: bool = True
-    operator_axis: OperatorAxis = field(default_factory=OperatorAxis)
 
 
 # ---------------------------------------------------------------------------

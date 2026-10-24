@@ -11,8 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from core.models import IntentVector
 from core.substrate import SubstrateState
-from core.engine import IntentVector  # if IntentVector lives in engine.py
 
 
 class DominionPhysics(Protocol):

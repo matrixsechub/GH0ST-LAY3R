@@ -16,8 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Protocol
 
+from core.models import IntentVector
 from core.substrate import SubstrateState
-from core.engine import IntentVector
 
 
 # ---------------------------------------------------------------------------

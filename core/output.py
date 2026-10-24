@@ -14,8 +14,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict
 import time
 
+from core.models import IntentVector
 from core.substrate import SubstrateState
-from core.engine import IntentVector  # where IntentVector currently lives
 
 
 @dataclass
