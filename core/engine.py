@@ -17,6 +17,7 @@ from typing import Any, Dict, List
 import logging
 import uuid
 
+from core.intent import IntentVector  # re-exported for existing callers
 from core.substrate import SubstrateState, SubstrateIngestion
 from core.physics import DefaultDominionPhysics
 from core.oversoul import DefaultOversoul, OversoulConfig
@@ -52,14 +53,6 @@ class OperatorAxis:
     alignment: str = "operator-defensive"
     doctrine: str = "bounded-escalation"
     signature: str = "MatrixSecHub"
-
-
-@dataclass
-class IntentVector:
-    id: str
-    source: str
-    description: str
-    tags: List[str] = field(default_factory=list)
 
 
 @dataclass

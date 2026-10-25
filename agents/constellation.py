@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Protocol
 
 from core.substrate import SubstrateState
-from core.engine import IntentVector
+from core.intent import IntentVector
 
 
 # ---------------------------------------------------------------------------
