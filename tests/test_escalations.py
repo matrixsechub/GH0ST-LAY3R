@@ -10,6 +10,10 @@ escalations and the intake flow.
 
 from __future__ import annotations
 
+import http.client
+import socket
+import urllib.parse
+
 import pytest
 
 import scripts.serve as serve
@@ -153,9 +157,11 @@ def test_resolve_and_dismiss_require_token(hq, status, headers):
 def test_resolve_refused_when_token_unset(hq, monkeypatch):
     escalation = _gov3_escalation(hq)
     monkeypatch.delenv(serve.OPERATOR_TOKEN_ENV)
+    before = _snapshot(hq)
     code, body = _patch(hq, escalation["id"], {"status": "dismissed"}, AUTH)
     assert code == 403
     assert serve.OPERATOR_TOKEN_ENV in body["error"]
+    assert _snapshot(hq) == before
 
 
 def test_resolve_refused_on_non_loopback_bind(hq, monkeypatch):
@@ -219,7 +225,8 @@ def test_cors_preflight_allows_patch(hq):
     import urllib.request
     req = urllib.request.Request(hq.base + "/escalations/x", method="OPTIONS")
     with urllib.request.urlopen(req, timeout=5) as resp:
-        assert "PATCH" in resp.headers["Access-Control-Allow-Methods"]
+        methods = [m.strip() for m in resp.headers["Access-Control-Allow-Methods"].split(",")]
+    assert "PATCH" in methods
 
 
 # ---------------------------------------------------------------------------
@@ -263,3 +270,64 @@ def test_intake_approve_still_closes_acknowledged_escalations(hq):
     latest = hq.get("/intake-agent-v2/lifecycle")[1][-1]
     _, approved = hq.post(ACTION, {"lifecycle_id": latest["id"], "action": "approve"}, AUTH)
     assert [(e["id"], e["status"]) for e in approved["escalations"]] == [(escalation["id"], "resolved")]
+
+
+def test_intake_approve_walks_pending_escalation_through_acknowledged(hq):
+    # The operator's approve must follow the state machine, not jump
+    # pending -> resolved: each step is audited.
+    _, reg = hq.post("/api/register", {"raw": "x"})
+    _, esc_body = hq.post(ACTION, {"lifecycle_id": reg["lifecycle"]["id"], "action": "escalate"}, AUTH)
+    escalation = esc_body["escalations"][0]
+    assert escalation["status"] == "pending"
+
+    latest = hq.get("/intake-agent-v2/lifecycle")[1][-1]
+    _, approved = hq.post(ACTION, {"lifecycle_id": latest["id"], "action": "approve"}, AUTH)
+    assert [(e["id"], e["status"]) for e in approved["escalations"]] == [(escalation["id"], "resolved")]
+
+    events = [e for e in hq.get("/audit?event_type=escalation.status_changed")[1]
+              if e["target_id"] == escalation["id"]]
+    assert [(e["payload"]["from_status"], e["payload"]["status"]) for e in events] == [
+        ("pending", "acknowledged"),
+        ("acknowledged", "resolved"),
+    ]
+    assert all((e["actor_id"], e["actor_type"]) == ("lupe", "operator") for e in events)
+
+
+# ---------------------------------------------------------------------------
+# Malformed and stalled request bodies
+# ---------------------------------------------------------------------------
+
+def _raw_patch(hq, path: str, body: bytes) -> tuple[int, bytes]:
+    url = urllib.parse.urlsplit(hq.base)
+    conn = http.client.HTTPConnection(url.hostname, url.port, timeout=5)
+    try:
+        conn.request("PATCH", path, body=body, headers={**AUTH, "Content-Type": "application/json"})
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("body", [
+    b'{"status": "dismissed\xff"}',
+    b"[" * 30_000 + b"]" * 30_000,
+], ids=["invalid-utf8", "deeply-nested"])
+def test_undecodable_body_is_400_without_side_effects(hq, body):
+    escalation = _gov3_escalation(hq)
+    before = _snapshot(hq)
+    status, raw = _raw_patch(hq, f"/escalations/{escalation['id']}", body)
+    assert status == 400
+    assert b"Invalid JSON body" in raw
+    assert _snapshot(hq) == before
+
+
+def test_stalled_body_is_dropped(hq, monkeypatch):
+    # A client that declares a body and never sends it must not pin a
+    # server thread: the connection is closed after the socket timeout.
+    # BaseHTTPRequestHandler's default is None (wait forever).
+    assert serve.GhostHQHandler.timeout == serve.REQUEST_TIMEOUT_SECONDS > 0
+    monkeypatch.setattr(serve.GhostHQHandler, "timeout", 0.5)
+    url = urllib.parse.urlsplit(hq.base)
+    with socket.create_connection((url.hostname, url.port), timeout=5) as sock:
+        sock.sendall(b"PATCH /escalations/x HTTP/1.1\r\nHost: t\r\nContent-Length: 10\r\n\r\n")
+        assert sock.recv(1024) == b""
