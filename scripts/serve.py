@@ -414,6 +414,21 @@ def _find_escalation(escalation_id: str) -> dict | None:
     return next((e for e in _escalations if e.get("id") == escalation_id), None)
 
 
+def _find_by(records: list, key: str, value: str) -> dict | None:
+    """First record whose `key` equals `value`. Caller must hold _lock."""
+    return next((r for r in records if r.get(key) == value), None)
+
+
+def _parse_timestamp(value: str) -> datetime | None:
+    """ISO 8601 -> aware UTC datetime; naive values are taken as UTC. None if invalid."""
+    try:
+        # fromisoformat() only accepts a trailing "Z" from Python 3.11.
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def _non_string_field(body: dict, *names: str) -> str | None:
     """Name of the first present field in `names` whose value is not a string."""
     for name in names:
@@ -697,37 +712,43 @@ class GhostHQHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path, params = _parse_path(self.path)
+        # Every filter takes one value; a repeated parameter would reach the
+        # filters as a list.
+        repeated = sorted(k for k, v in params.items() if isinstance(v, list))
+        if repeated:
+            _send_error(self, 400, f"Query parameter given more than once: {', '.join(repeated)}")
+            return
         with _lock:
             if path == "/hq/health":
                 _send_json(self, 200, _compute_hq_health())
             elif path == "/audit":
                 self._get_audit(params)
+            elif (event_id := _id_from_path(path, "/audit")) is not None:
+                self._send_record(_find_by(_audit_log, "id", event_id), f"No audit event: {event_id}")
             elif path == "/escalations":
                 self._get_escalations(params)
             elif (escalation_id := _id_from_path(path, "/escalations")) is not None:
-                escalation = _find_escalation(escalation_id)
-                if escalation is None:
-                    _send_error(self, 404, f"No escalation: {escalation_id}")
-                else:
-                    _send_json(self, 200, escalation)
+                self._send_record(_find_escalation(escalation_id), f"No escalation: {escalation_id}")
             elif path == "/operator/sessions":
                 self._get_sessions(params)
             elif (session_id := _id_from_path(path, "/operator/sessions")) is not None:
-                session = _find_session(session_id)
-                if session is None:
-                    _send_error(self, 404, f"No operator session: {session_id}")
-                else:
-                    _send_json(self, 200, session)
+                self._send_record(_find_session(session_id), f"No operator session: {session_id}")
             elif path == "/agents":
                 _send_json(self, 200, _registry.get("agents", []))
+            elif (agent_id := _id_from_path(path, "/agents")) is not None:
+                agent = _find_by(_registry.get("agents", []), "id", agent_id)
+                self._send_record(agent, f"No agent: {agent_id}")
             elif path == "/engines":
                 _send_json(self, 200, _registry.get("engines", []))
             elif path == "/operators":
                 _send_json(self, 200, _registry.get("operators", []))
+            elif (operator_id := _id_from_path(path, "/operators")) is not None:
+                operator = _find_by(_registry.get("operators", []), "operator_id", operator_id)
+                self._send_record(operator, f"No operator: {operator_id}")
             elif path == "/agent-pools":
                 _send_json(self, 200, list(_pools))
-            elif path == "/agents/intake-agent-v2":
-                self._get_intake_agent_entry()
+            elif (pool_id := _id_from_path(path, "/agent-pools")) is not None:
+                self._send_record(_find_by(_pools, "id", pool_id), f"No agent pool: {pool_id}")
             elif path == "/intake-agent-v2/lifecycle":
                 _send_json(self, 200, list(_intake_lifecycle))
             elif path == "/intake-agent-v2/metrics":
@@ -890,14 +911,33 @@ class GhostHQHandler(BaseHTTPRequestHandler):
 
         _send_json(self, 200, envelope)
 
+    def _send_record(self, record: dict | None, not_found: str) -> None:
+        if record is None:
+            _send_error(self, 404, not_found)
+        else:
+            _send_json(self, 200, record)
+
     def _get_audit(self, params: dict) -> None:
+        """
+        GET /audit — exact-match filters on actor_id, actor_type, target_id,
+        target_type and event_type; `since` / `until` (ISO 8601, inclusive)
+        bound the timestamp.
+        """
+        bounds = {}
+        for name in ("since", "until"):
+            if (value := params.get(name)) is not None:
+                bounds[name] = _parse_timestamp(value)
+                if bounds[name] is None:
+                    _send_error(self, 400, f"'{name}' must be an ISO 8601 timestamp")
+                    return
         events = list(_audit_log)
-        if et := params.get("event_type"):
-            events = [e for e in events if e.get("event_type") == et]
-        if ai := params.get("actor_id"):
-            events = [e for e in events if e.get("actor_id") == ai]
-        if since := params.get("since"):
-            events = [e for e in events if e.get("timestamp", "") >= since]
+        for field in ("actor_id", "actor_type", "target_id", "target_type", "event_type"):
+            if value := params.get(field):
+                events = [e for e in events if e.get(field) == value]
+        if "since" in bounds:
+            events = [e for e in events if _parse_timestamp(e["timestamp"]) >= bounds["since"]]
+        if "until" in bounds:
+            events = [e for e in events if _parse_timestamp(e["timestamp"]) <= bounds["until"]]
         _send_json(self, 200, events)
 
     def _get_escalations(self, params: dict) -> None:
@@ -1041,14 +1081,6 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             updated = dict(escalation)
 
         _send_json(self, 200, updated)
-
-    def _get_intake_agent_entry(self) -> None:
-        agents = _registry.get("agents", [])
-        for agent in agents:
-            if agent.get("id") == "intake-agent-v2":
-                _send_json(self, 200, agent)
-                return
-        _send_error(self, 404, "intake-agent-v2 not found in registry")
 
     def _post_register(self, body: dict) -> None:
         """

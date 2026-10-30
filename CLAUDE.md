@@ -148,11 +148,12 @@ PYTHONPATH=. python3 scripts/serve.py [--port 8000]   # HQ HTTP server (see belo
 
 `scripts/serve.py` starts a single-process, dev-grade HTTP server that wraps
 `GhostLayerEngine` and exposes a subset of `API_CONTRACT.md` v2 endpoints:
-`POST /intents`, `GET /hq/health`, `GET /audit`, `GET /escalations`,
-`GET /escalations/:id`, `PATCH /escalations/:id`, `GET /operator/sessions`,
-`GET /operator/sessions/:id`, `POST /operator/sessions`,
-`PATCH /operator/sessions/:id`,
-`GET /agents`, `GET /engines`, `GET /operators`, `GET /agent-pools`, plus the
+`POST /intents`, `GET /hq/health`, `GET /audit`, `GET /audit/:id`,
+`GET /escalations`, `GET /escalations/:id`, `PATCH /escalations/:id`,
+`GET /operator/sessions`, `GET /operator/sessions/:id`,
+`POST /operator/sessions`, `PATCH /operator/sessions/:id`,
+`GET /agents`, `GET /agents/:id`, `GET /engines`, `GET /operators`,
+`GET /operators/:id`, `GET /agent-pools`, `GET /agent-pools/:id`, plus the
 Intake Agent v2 bootstrap routes (`POST /api/register`, `GET /marketplace`,
 `POST /intake-agent-v2/lifecycle/transition`, `POST /intake-agent-v2/lifecycle/action`,
 `GET /intake-agent-v2/lifecycle`,

@@ -284,7 +284,10 @@ Response: `{ "rebuilt_at": "<ISO 8601>", "capability_count": <int> }`.
 
 List `AuditEvent` records. Filter params: `actor_id`, `actor_type`,
 `target_id`, `target_type`, `event_type`; range by `since` / `until`
-(ISO 8601). Append-only — no `POST`, `PATCH`, or `DELETE`.
+(ISO 8601). Append-only — no `POST`, `PATCH`, or `DELETE`. (The dev-grade
+`scripts/serve.py` implements all of these filters as exact matches, with
+inclusive `since` / `until` compared as instants; a query parameter given
+more than once is a 400 on every GET route.)
 
 ### `GET /audit/:id`
 
