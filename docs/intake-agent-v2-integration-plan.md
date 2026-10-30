@@ -77,14 +77,21 @@ While any intake escalation is open (`pending` or `acknowledged`, for an
 intent that has lifecycle records), `GET /marketplace` reports `review`
 for everyone, so approving one intake cannot grant access while another is
 under review. GOV-3 escalations raised by `POST /intents` have no intake
-and do not gate the marketplace. Otherwise it follows the most recently
-appended lifecycle record:
+and do not gate the marketplace. Otherwise it is `full` while any intake
+currently has access, and `observer` if none does.
 
-| Latest stage                         | `mode`     | `access` | Banner |
-|--------------------------------------|------------|----------|--------|
-| none, `received`, `queued`, `processed` | `observer` | `false`  | "IntakeAgentV2: Access Pending — You are in Observer Mode." |
-| `validated`                          | `full`     | `true`   | none |
-| `escalated`                          | `review`   | `false`  | "IntakeAgentV2: Operator Review in Progress — Access suspended pending resolution." |
+An intake gains access when it reaches `validated`, either through the
+operator's `approve` or the token-gated transition. It loses access only
+when the operator escalates or closes it. Everything a caller can do without
+the token, such as registering intakes or moving them through `queued` and
+`processed`, leaves access unchanged. Annotate and reassign leave it
+unchanged too. So only the operator can move the marketplace out of `full`.
+
+| State                                          | `mode`     | `access` | Banner |
+|------------------------------------------------|------------|----------|--------|
+| an intake escalation is open                   | `review`   | `false`  | "IntakeAgentV2: Operator Review in Progress — Access suspended pending resolution." |
+| otherwise, some intake has access              | `full`     | `true`   | none |
+| otherwise                                      | `observer` | `false`  | "IntakeAgentV2: Access Pending — You are in Observer Mode." |
 
 There is no identity layer, so this is one global state for the server,
 not per-user. The register, transition, and action responses include the
@@ -186,15 +193,15 @@ Endpoints added to `scripts/serve.py`:
 | GET  | `/intake-agent-v2/metrics` | Per-stage counts |
 | POST | `/api/register` | Public intake submission → `received` record |
 | GET  | `/marketplace` | Access mode + banner from latest stage |
-| POST | `/intake-agent-v2/lifecycle/transition` | Advance one record one stage |
+| POST | `/intake-agent-v2/lifecycle/transition` | Advance one record one stage (token required to reach `validated`) |
 | POST | `/intake-agent-v2/lifecycle/action` | Operator action (token required) |
 | GET  | `/cockpit/intake` | Read-only operator panel |
 
-> **Security:** `POST /api/register` and `POST /intake-agent-v2/lifecycle/transition`
-> have no authentication. Anyone who can reach the server can advance a
-> record from `received` to `validated` — the same result as the operator's
-> `approve` — and unlock full marketplace access. Only the operator action
-> endpoint is protected. Run `serve.py` on localhost only (its default bind).
+> **Security:** reaching `validated` (full marketplace access) needs the
+> operator token, through either the `approve` action or the transition
+> endpoint. `POST /api/register`, the `validated → queued → processed`
+> transitions, and all GET endpoints have no authentication. Run `serve.py`
+> on localhost only (its default bind).
 
 ### GET /agents/intake-agent-v2
 Returns the registry entry for `intake-agent-v2` from `_registry["agents"]`.
@@ -239,7 +246,11 @@ Returns `{"mode", "access", "banner", "latest_intake_stage",
 Body: `{"lifecycle_id": "...", "to_stage": "...", "notes"?: "..."}`. Returns
 200 with `{"previous", "current", "marketplace"}`; 400 for missing fields;
 404 for an unknown `lifecycle_id`; 409 if `lifecycle_id` is not the
-intent's newest record; 422 for a disallowed transition.
+intent's newest record; 422 for a disallowed transition. Moving to
+`validated` requires `Authorization: Bearer <GHOST_OPERATOR_TOKEN>`, checked
+before the record lookup (401/403, same rules as the action endpoint), and
+is audited with the operator as the actor. `queued` and `processed` need no
+token.
 
 ### POST /intake-agent-v2/lifecycle/action
 Header: `Authorization: Bearer <GHOST_OPERATOR_TOKEN>`. Body:

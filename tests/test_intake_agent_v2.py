@@ -24,6 +24,13 @@ from conftest import REPO_ROOT
 
 OBSERVER_BANNER = "IntakeAgentV2: Access Pending — You are in Observer Mode."
 TRANSITION = "/intake-agent-v2/lifecycle/transition"
+TOKEN = "test-operator-token"
+AUTH = {"Authorization": f"Bearer {TOKEN}"}   # moving to "validated" needs the operator token
+
+
+@pytest.fixture(autouse=True)
+def _operator_token(monkeypatch):
+    monkeypatch.setenv(serve.OPERATOR_TOKEN_ENV, TOKEN)
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +44,7 @@ def _register(hq, source: str = "test") -> dict:
 
 
 def _transition(hq, lifecycle_id: str, to_stage: str) -> tuple[int, dict]:
-    return hq.post(TRANSITION, {"lifecycle_id": lifecycle_id, "to_stage": to_stage})
+    return hq.post(TRANSITION, {"lifecycle_id": lifecycle_id, "to_stage": to_stage}, AUTH)
 
 
 def _advance(hq, lifecycle_id: str, *stages: str) -> str:
@@ -128,10 +135,11 @@ def test_marketplace_defaults_to_observer_with_no_records(hq):
 @pytest.mark.parametrize("stages, mode, access", [
     ((), "observer", False),
     (("validated",), "full", True),
-    (("validated", "queued"), "observer", False),
-    (("validated", "queued", "processed"), "observer", False),
+    # The public queued/processed steps keep the access validation granted.
+    (("validated", "queued"), "full", True),
+    (("validated", "queued", "processed"), "full", True),
 ])
-def test_marketplace_mode_tracks_latest_stage(hq, stages, mode, access):
+def test_marketplace_mode_follows_validation(hq, stages, mode, access):
     _advance(hq, _register(hq)["lifecycle"]["id"], *stages)
     _, body = hq.get("/marketplace")
     assert (body["mode"], body["access"]) == (mode, access)
@@ -192,19 +200,19 @@ def test_invalid_transitions_are_rejected_without_side_effects(hq, from_stages, 
     ({"lifecycle_id": "does-not-exist", "to_stage": "validated"}, 404),
 ])
 def test_transition_input_validation(hq, payload, code):
-    status, body = hq.post(TRANSITION, payload)
+    status, body = hq.post(TRANSITION, payload, AUTH)
     assert status == code
     assert "error" in body
 
 
-def test_latest_state_follows_append_order_across_chains(hq):
+def test_registering_another_intake_does_not_revoke_access(hq):
     chain_a = _register(hq, source="A")["lifecycle"]["id"]
     _advance(hq, chain_a, "validated")
     _register(hq, source="B")  # appended after chain A's validated record
 
     _, body = hq.get("/marketplace")
-    assert body["latest_intake_stage"] == "received"
-    assert body["mode"] == "observer"
+    assert body["latest_intake_stage"] == "received"   # still reports the newest record
+    assert body["mode"] == "full"                      # but A's access stands
 
 
 # ---------------------------------------------------------------------------

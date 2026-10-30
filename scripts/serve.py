@@ -26,6 +26,7 @@ Endpoints:
     POST /api/register                     — submit intake; creates IntakeLifecycleRecord stage=received
     GET  /marketplace                      — lifecycle-aware banner (observer/full/review mode)
     POST /intake-agent-v2/lifecycle/transition — advance stage: received→validated→queued→processed
+                                             (→validated needs Bearer GHOST_OPERATOR_TOKEN)
     POST /intake-agent-v2/lifecycle/action — operator-only (Bearer GHOST_OPERATOR_TOKEN):
                                              approve / escalate / close / reassign / annotate
     GET  /cockpit/intake                   — read-only panel stub (status, timeline, last 10 submissions)
@@ -285,6 +286,11 @@ _INTAKE_VALID_TRANSITIONS: dict = {
     "queued":    {"processed"},
 }
 
+# Target stages the transition endpoint only moves to with the operator token.
+# "validated" grants full marketplace access, so reaching it without the token
+# would be an unauthenticated "approve".
+_OPERATOR_ONLY_STAGES = frozenset({"validated"})
+
 # Operator actions: action -> {from_stage: to_stage}. A stage missing from an
 # action's map means the action is not allowed from that stage. "processed"
 # is terminal except for annotate. See docs/intake-agent-v2-integration-plan.md.
@@ -406,16 +412,35 @@ def _open_intake_escalation_count() -> int:
     )
 
 
+def _intents_with_access() -> set:
+    """
+    Intents whose history currently grants marketplace access. Reaching
+    "validated" (operator approve, or the token-gated transition) grants it;
+    being escalated or closed by the operator revokes it. Everything a caller
+    can do without the token (register, the validated -> queued -> processed
+    steps) and annotate / reassign leave it unchanged. Caller must hold _lock.
+    """
+    access: dict = {}
+    for record in _intake_lifecycle:
+        intent_id = record.get("intent_id")
+        if record.get("stage") == "validated":
+            access[intent_id] = True
+        elif record.get("stage") == "escalated" or record.get("operator_action") == "close":
+            access[intent_id] = False
+    return {intent_id for intent_id, granted in access.items() if granted}
+
+
 def _current_marketplace() -> dict:
     """
-    The marketplace state everyone sees (there is no identity layer). Any
-    open intake escalation puts it in review mode, so approving one intake
-    cannot grant access while another is under review; otherwise it follows
-    the most recently appended lifecycle record. Caller must hold _lock.
+    The marketplace state everyone sees (there is no identity layer):
+    review while any intake escalation is open, so approving one intake
+    cannot grant access while another is under review; otherwise full while
+    any intake has access (see _intents_with_access), else observer. Only
+    the operator can therefore move it out of full. Caller must hold _lock.
     """
     if _open_intake_escalation_count():
         return _marketplace_state("escalated")
-    return _marketplace_state(_intake_lifecycle[-1].get("stage") if _intake_lifecycle else None)
+    return _marketplace_state("validated" if _intents_with_access() else None)
 
 
 def _marketplace_state(latest_stage: str | None) -> dict:
@@ -857,7 +882,8 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         """
         GET /marketplace — return lifecycle-aware marketplace access state.
         No auth. Review mode while any intake escalation is open; otherwise
-        follows the most recent IntakeLifecycleRecord (observer if none).
+        full while any intake has access, else observer (_current_marketplace).
+        latest_intake_stage still reports the newest record's stage.
         Called under do_GET's _lock — do not re-acquire.
         """
         records = list(_intake_lifecycle)
@@ -879,6 +905,8 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         Body: {"lifecycle_id": "...", "to_stage": "validated", "notes": "..."}
         Validates the transition against _INTAKE_VALID_TRANSITIONS and
         appends a new IntakeLifecycleRecord (append-only; does not mutate).
+        Moving to a stage in _OPERATOR_ONLY_STAGES ("validated", which grants
+        marketplace access) requires the operator token, like the approve action.
         """
         bad_field = _non_string_field(body, "lifecycle_id", "to_stage", "notes")
         if bad_field:
@@ -891,6 +919,13 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         if not lifecycle_id or not to_stage:
             _send_error(self, 400, "'lifecycle_id' and 'to_stage' are required")
             return
+
+        by_operator = to_stage in _OPERATOR_ONLY_STAGES
+        if by_operator:
+            auth_error = _operator_auth_error(self.headers.get("Authorization", ""))
+            if auth_error:
+                _send_error(self, *auth_error)
+                return
 
         with _lock:
             source_record = next(
@@ -916,6 +951,8 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                 )
                 return
 
+            # Resolve the audit actor before any state changes.
+            actor_id = _registered_operator_id() if by_operator else "system"
             now = _now()
             new_record: dict = {
                 "id": str(uuid.uuid4()),
@@ -933,8 +970,8 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             _intake_lifecycle.append(new_record)
             _write_audit(
                 "intake.stage_changed",
-                actor_id="system",
-                actor_type="system",
+                actor_id=actor_id,
+                actor_type="operator" if by_operator else "system",
                 target_id=new_record["id"],
                 target_type="intake-lifecycle",
                 payload={
