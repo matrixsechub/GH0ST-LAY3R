@@ -288,5 +288,7 @@ def test_presence_header_no_longer_opens_a_session(hq):
 def test_cors_preflight(hq):
     req = urllib.request.Request(hq.base + SESSIONS, method="OPTIONS")
     with urllib.request.urlopen(req, timeout=5) as resp:
-        assert "PATCH" in resp.headers["Access-Control-Allow-Methods"]
-        assert "X-Ghost-Operator-Online" not in resp.headers["Access-Control-Allow-Headers"]
+        methods = [m.strip() for m in resp.headers["Access-Control-Allow-Methods"].split(",")]
+        allowed_headers = resp.headers["Access-Control-Allow-Headers"]
+    assert "PATCH" in methods
+    assert "X-Ghost-Operator-Online" not in allowed_headers
