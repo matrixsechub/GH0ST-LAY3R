@@ -323,6 +323,13 @@ _ESCALATION_TRANSITIONS: dict = {
 _ESCALATION_STATUSES = ("acknowledged", "resolved", "dismissed")
 _OPERATOR_ONLY_ESCALATION_STATUSES = frozenset({"resolved", "dismissed"})
 
+# GOV-n rules that produce an EscalationEvent, with AGENT_HQ.md's default
+# severity. GOV-4, GOV-6 and GOV-7 never escalate.
+_ESCALATION_RULE_SEVERITY = {"GOV-1": "low", "GOV-2": "medium", "GOV-3": "high", "GOV-5": "critical"}
+
+# Fields of an EscalationEvent that only the server sets.
+_SERVER_ASSIGNED_ESCALATION_FIELDS = ("id", "type", "status", "created_at", "resolved_at", "resolution")
+
 # ROUTE-6 (AGENT_HQ.md): an intent with a pending or acknowledged escalation
 # is routed here, overriding any other lane, until every such escalation is
 # resolved or dismissed. Recorded as audit events only; nothing dispatches.
@@ -616,6 +623,53 @@ def _compute_hq_health() -> dict:
     }
 
 
+def _create_escalation(
+    trigger_rule: str,
+    intent_id: str,
+    severity: str,
+    reason: str,
+    agent_ids: list,
+    actor_id: str,
+    actor_type: str,
+    *,
+    created_at: str | None = None,
+    audit_payload: dict | None = None,
+) -> dict:
+    """
+    Append a pending EscalationEvent, audit it as escalation.created, and
+    apply ROUTE-6 to its intent. Caller must hold _lock.
+    """
+    esc: dict = {
+        "id": str(uuid.uuid4()),
+        "type": "escalation",
+        "trigger_rule": trigger_rule,
+        "intent_id": intent_id,
+        "severity": severity,
+        "reason": reason,
+        "agent_ids": list(agent_ids),
+        "status": "pending",
+        "created_at": created_at or _now(),
+        "resolved_at": None,
+        "resolution": "",
+    }
+    _escalations.append(esc)
+    _write_audit(
+        "escalation.created",
+        actor_id=actor_id,
+        actor_type=actor_type,
+        target_id=esc["id"],
+        target_type="escalation",
+        payload={"trigger_rule": trigger_rule, "severity": severity, **(audit_payload or {})},
+    )
+    _sync_route6(intent_id, esc["id"])
+    return esc
+
+
+def _known_intent(intent_id: str) -> bool:
+    """True if the intent came through POST /intents or an intake. Caller must hold _lock."""
+    return intent_id in _intent_lanes or _latest_intake_record(intent_id) is not None
+
+
 def _maybe_raise_gov3(intent_id: str, request_tags: list, volatility: float) -> None:
     """
     GOV-3: raise an EscalationEvent when an intent carries escalation-triggering
@@ -636,29 +690,15 @@ def _maybe_raise_gov3(intent_id: str, request_tags: list, volatility: float) -> 
 
     severity = "critical" if volatility >= 0.9 or "critical" in triggered_tags else "high"
 
-    esc: dict = {
-        "id": str(uuid.uuid4()),
-        "type": "escalation",
-        "trigger_rule": "GOV-3",
-        "intent_id": intent_id,
-        "severity": severity,
-        "reason": f"Operator review required: {'; '.join(reason_parts)}.",
-        "agent_ids": ["adversarial-intel-agent", "containment-agent"],
-        "status": "pending",
-        "created_at": _now(),
-        "resolved_at": None,
-        "resolution": "",
-    }
-    _escalations.append(esc)
-    _write_audit(
-        "escalation.created",
+    _create_escalation(
+        "GOV-3",
+        intent_id,
+        severity,
+        f"Operator review required: {'; '.join(reason_parts)}.",
+        ["adversarial-intel-agent", "containment-agent"],
         actor_id="ghost-layer-core",
         actor_type="system",
-        target_id=esc["id"],
-        target_type="escalation",
-        payload={"trigger_rule": "GOV-3", "severity": severity},
     )
-    _sync_route6(intent_id, esc["id"])
 
 
 def _suggested_lane(envelope: dict) -> str:
@@ -844,6 +884,8 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             self._post_operator_action(body)
         elif path == "/operator/sessions":
             self._post_session(body)
+        elif path == "/escalations":
+            self._post_escalation(body)
         else:
             _send_error(self, 404, f"No route: {path}")
 
@@ -1087,6 +1129,74 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             )
             closed = dict(session)
         _send_json(self, 200, closed)
+
+    def _post_escalation(self, body: dict) -> None:
+        """
+        POST /escalations
+        Body: {"trigger_rule": "GOV-1|GOV-2|GOV-3|GOV-5", "intent_id": "...",
+               "severity"?: "...", "reason"?: "...", "agent_ids"?: ["..."]}
+        Creates a pending EscalationEvent (201). Per AGENT_HQ.md any caller
+        may create one; a token that is sent must be valid and attributes it
+        to the operator. severity defaults per the GOV-n mapping. The intent
+        must be one the server has seen, and agent_ids registered agents.
+        """
+        assigned = [f for f in _SERVER_ASSIGNED_ESCALATION_FIELDS if f in body]
+        if assigned:
+            _send_error(self, 400, f"Server-assigned field(s) not accepted: {', '.join(assigned)}")
+            return
+        bad_field = _non_string_field(body, "trigger_rule", "intent_id", "severity", "reason")
+        if bad_field:
+            _send_error(self, 400, f"'{bad_field}' must be a string")
+            return
+        agent_ids = body.get("agent_ids", [])
+        if not isinstance(agent_ids, list) or not all(isinstance(a, str) for a in agent_ids):
+            _send_error(self, 400, "'agent_ids' must be a list of strings")
+            return
+        trigger_rule = body.get("trigger_rule", "")
+        intent_id = body.get("intent_id", "")
+        for name, value in (("trigger_rule", trigger_rule), ("intent_id", intent_id)):
+            if not value:
+                _send_error(self, 400, f"'{name}' is required")
+                return
+        if trigger_rule not in _ESCALATION_RULE_SEVERITY:
+            _send_error(
+                self, 422,
+                f"'{trigger_rule}' does not produce escalations. Valid: {list(_ESCALATION_RULE_SEVERITY)}",
+            )
+            return
+        severity = body.get("severity") or _ESCALATION_RULE_SEVERITY[trigger_rule]
+        if severity not in _ESCALATION_SEVERITIES:
+            _send_error(self, 422, f"Unknown severity '{severity}'. Valid: {list(_ESCALATION_SEVERITIES)}")
+            return
+
+        authorization = self.headers.get("Authorization", "")
+        if authorization:
+            auth_error = _operator_auth_error(authorization)
+            if auth_error:
+                _send_error(self, *auth_error)
+                return
+
+        with _lock:
+            if not _known_intent(intent_id):
+                _send_error(self, 422, f"Unknown intent: {intent_id}")
+                return
+            registered = {a.get("id") for a in _registry.get("agents", [])}
+            unknown = [a for a in agent_ids if a not in registered]
+            if unknown:
+                _send_error(self, 422, f"Unknown agent id(s): {', '.join(unknown)}")
+                return
+            esc = _create_escalation(
+                trigger_rule,
+                intent_id,
+                severity,
+                body.get("reason", ""),
+                agent_ids,
+                actor_id=_registered_operator_id() if authorization else "public",
+                actor_type="operator" if authorization else "system",
+            )
+            created = dict(esc)
+
+        _send_json(self, 201, created)
 
     def _patch_escalation(self, escalation_id: str, body: dict) -> None:
         """
@@ -1404,31 +1514,17 @@ class GhostHQHandler(BaseHTTPRequestHandler):
 
             touched: list = []
             if action == "escalate":
-                esc: dict = {
-                    "id": str(uuid.uuid4()),
-                    "type": "escalation",
-                    "trigger_rule": "operator-manual",
-                    "intent_id": intent_id,
-                    "severity": severity,
-                    "reason": notes or "Escalated by operator from intake lifecycle.",
-                    "agent_ids": ["intake-agent-v2"],
-                    "status": "pending",
-                    "created_at": now,
-                    "resolved_at": None,
-                    "resolution": "",
-                }
-                _escalations.append(esc)
-                touched.append(esc)
-                _write_audit(
-                    "escalation.created",
+                touched.append(_create_escalation(
+                    "operator-manual",
+                    intent_id,
+                    severity,
+                    notes or "Escalated by operator from intake lifecycle.",
+                    ["intake-agent-v2"],
                     actor_id=op_id,
                     actor_type="operator",
-                    target_id=esc["id"],
-                    target_type="escalation",
-                    payload={"trigger_rule": "operator-manual", "severity": severity,
-                             "intake_record_id": new_record["id"]},
-                )
-                _sync_route6(intent_id, esc["id"])
+                    created_at=now,
+                    audit_payload={"intake_record_id": new_record["id"]},
+                ))
             elif action in ("approve", "close"):
                 # Any open escalation for the intent ends when the operator
                 # approves or closes it, whatever stage it was in.
