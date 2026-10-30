@@ -69,4 +69,5 @@ def _reset_hq_state():
         serve._audit_log.clear()
         serve._escalations.clear()
         serve._sessions.clear()
+        serve._pools.clear()
     yield
