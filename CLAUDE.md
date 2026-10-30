@@ -191,13 +191,15 @@ acknowledged`; `resolved` and `dismissed` need the token. Closing an
 intake's escalation this way leaves the intake `escalated` (no marketplace
 access) until the operator approves or closes it. `POST /escalations` is
 open to anyone, as the Escalation Lifecycle allows (a token, if sent, must
-be valid and attributes the escalation to the operator). It accepts only
+be valid and attributes the escalation to the operator), except on an
+intake's intent: an open intake escalation suspends marketplace access for
+every client, so that needs the token. It accepts only
 the rules that escalate (`GOV-1`, `GOV-2`, `GOV-3`, `GOV-5`, with their
 default severities), an intent the server has seen, and registered agent
 ids; it creates a `pending` escalation, which holds the intent in
 `operator-review` (ROUTE-6) until the operator closes it. So anyone who can
-reach the server can put any known intent under review: keep the default
-localhost bind.
+reach the server can put any known non-intake intent under review: keep the
+default localhost bind.
 
 **Operator presence (GOV-7)** comes only from an open session: the operator
 opens one with `POST /operator/sessions` and closes it with

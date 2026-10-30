@@ -2,8 +2,9 @@
 POST /escalations — creating an EscalationEvent (API_CONTRACT.md v2).
 
 Any caller may create a pending escalation (AGENT_HQ.md's Escalation
-Lifecycle); a token that is sent must be valid and attributes it to the
-operator. Only GOV-1, GOV-2, GOV-3 and GOV-5 produce escalations, with the
+Lifecycle) — except on an intake, where it would suspend marketplace access,
+so the operator token is required; a token that is sent must be valid and
+attributes it to the operator. Only GOV-1, GOV-2, GOV-3 and GOV-5 produce escalations, with the
 GOV-n -> severity defaults. The new escalation is audited, holds its intent
 in operator-review (ROUTE-6), and then follows the usual lifecycle.
 """
@@ -68,11 +69,41 @@ def test_explicit_severity_and_agents(hq):
     assert esc["agent_ids"] == ["containment-agent", "adversarial-intel-agent"]
 
 
-def test_intake_intent_can_be_escalated(hq):
+def _validated_intake(hq) -> str:
     _, reg = hq.post("/api/register", {"raw": "x"})
-    status, esc = _create(hq, {"trigger_rule": "GOV-5", "intent_id": reg["lifecycle"]["intent_id"]})
+    code, _ = hq.post("/intake-agent-v2/lifecycle/transition",
+                      {"lifecycle_id": reg["lifecycle"]["id"], "to_stage": "validated"}, AUTH)
+    assert code == 200
+    assert hq.get("/marketplace")[1]["mode"] == "full"
+    return reg["lifecycle"]["intent_id"]
+
+
+def test_operator_can_escalate_an_intake(hq):
+    intent_id = _validated_intake(hq)
+    status, _ = _create(hq, {"trigger_rule": "GOV-5", "intent_id": intent_id}, AUTH)
     assert status == 201
-    assert hq.get("/marketplace")[1]["mode"] == "review"
+    market = hq.get("/marketplace")[1]
+    assert (market["mode"], market["access"]) == ("review", False)
+
+
+@pytest.mark.parametrize("headers, code", [({}, 401), ({"Authorization": "Bearer nope"}, 401)])
+def test_public_cannot_escalate_an_intake(hq, headers, code):
+    # It would suspend marketplace access for every client; only the
+    # operator's token may change that.
+    intent_id = _validated_intake(hq)
+    before = _snapshot(hq), hq.get("/marketplace")[1]
+    status, body = _create(hq, {"trigger_rule": "GOV-5", "intent_id": intent_id}, headers)
+    assert status == code
+    assert "Operator authentication required" in body["error"]
+    assert (_snapshot(hq), hq.get("/marketplace")[1]) == before
+
+
+def test_intake_escalation_refused_when_token_unset(hq, monkeypatch):
+    _, reg = hq.post("/api/register", {"raw": "x"})
+    monkeypatch.delenv(serve.OPERATOR_TOKEN_ENV)
+    status, body = _create(hq, {"trigger_rule": "GOV-5", "intent_id": reg["lifecycle"]["intent_id"]})
+    assert status == 403
+    assert serve.OPERATOR_TOKEN_ENV in body["error"]
 
 
 @pytest.mark.parametrize("headers, actor", [({}, ("public", "system")), (AUTH, ("lupe", "operator"))])

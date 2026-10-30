@@ -121,7 +121,8 @@ severity mapping in `AGENT_HQ.md`), not typically by an external client.
 `trigger_rule` must be `GOV-1`, `GOV-2`, `GOV-3` or `GOV-5`; `severity`
 defaults per that mapping; `intent_id` must be an intent the server has
 seen and `agent_ids` registered agent ids; server-assigned fields in the
-body are a `400`. See `CLAUDE.md`.)
+body are a `400`. Escalating an intake's intent needs the operator token,
+because it suspends marketplace access. See `CLAUDE.md`.)
 
 Request: an `EscalationEvent` minus `id`, `status`, `created_at` (server-
 assigned):

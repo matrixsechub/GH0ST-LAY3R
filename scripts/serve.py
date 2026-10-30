@@ -1137,8 +1137,10 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                "severity"?: "...", "reason"?: "...", "agent_ids"?: ["..."]}
         Creates a pending EscalationEvent (201). Per AGENT_HQ.md any caller
         may create one; a token that is sent must be valid and attributes it
-        to the operator. severity defaults per the GOV-n mapping. The intent
-        must be one the server has seen, and agent_ids registered agents.
+        to the operator. Escalating an intake needs the token, since it
+        suspends marketplace access. severity defaults per the GOV-n mapping.
+        The intent must be one the server has seen, and agent_ids registered
+        agents.
         """
         assigned = [f for f in _SERVER_ASSIGNED_ESCALATION_FIELDS if f in body]
         if assigned:
@@ -1179,6 +1181,11 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         with _lock:
             if not _known_intent(intent_id):
                 _send_error(self, 422, f"Unknown intent: {intent_id}")
+                return
+            # An open escalation on an intake suspends marketplace access for
+            # everyone, which only the operator may do; other intents stay open.
+            if not authorization and _latest_intake_record(intent_id) is not None:
+                _send_error(self, *_operator_auth_error(authorization))
                 return
             registered = {a.get("id") for a in _registry.get("agents", [])}
             unknown = [a for a in agent_ids if a not in registered]
