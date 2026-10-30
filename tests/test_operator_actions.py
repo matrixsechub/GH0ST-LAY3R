@@ -411,17 +411,41 @@ def test_transition_to_validated_requires_token(hq, headers):
 def test_transition_to_validated_refused_when_token_unset(hq, monkeypatch):
     record = _register(hq)
     monkeypatch.delenv(serve.OPERATOR_TOKEN_ENV)
+    before = _snapshot(hq)
     status, body = hq.post(TRANSITION, {"lifecycle_id": record["id"], "to_stage": "validated"}, AUTH)
     assert status == 403
     assert serve.OPERATOR_TOKEN_ENV in body["error"]
+    assert _snapshot(hq) == before
+    assert hq.get("/marketplace")[1]["access"] is False
 
 
 def test_transition_to_validated_refused_on_non_loopback_bind(hq, monkeypatch):
     record = _register(hq)
     monkeypatch.setattr(serve, "_operator_bind_block", serve._bind_block_message("0.0.0.0", False))
+    before = _snapshot(hq)
     status, body = hq.post(TRANSITION, {"lifecycle_id": record["id"], "to_stage": "validated"}, AUTH)
     assert status == 403
     assert "--allow-insecure-operator" in body["error"]
+    assert _snapshot(hq) == before
+    assert hq.get("/marketplace")[1]["access"] is False
+
+
+def test_operator_lookup_failure_leaves_intake_unchanged(hq, monkeypatch):
+    # The audit actor is resolved before the record is appended, so a failure
+    # there cannot leave a validated intake behind without its audit event.
+    record = _register(hq)
+
+    def broken_lookup():
+        raise RuntimeError("malformed operators entry")
+
+    monkeypatch.setattr(serve, "_registered_operator_id", broken_lookup)
+    before = _snapshot(hq)
+    with pytest.raises(Exception):   # handler error: connection closes without a response
+        hq.post(TRANSITION, {"lifecycle_id": record["id"], "to_stage": "validated"}, AUTH)
+    monkeypatch.undo()
+    monkeypatch.setenv(serve.OPERATOR_TOKEN_ENV, TOKEN)
+    assert _snapshot(hq) == before
+    assert hq.get("/marketplace")[1]["access"] is False
 
 
 def test_transition_token_checked_before_record_lookup(hq):
@@ -435,8 +459,12 @@ def test_queued_and_processed_transitions_stay_public(hq):
     validated = _record_at(hq, "validated")
     status, body = hq.post(TRANSITION, {"lifecycle_id": validated["id"], "to_stage": "queued"})
     assert status == 200, body
+    assert body["current"]["stage"] == "queued"
     status, body = hq.post(TRANSITION, {"lifecycle_id": body["current"]["id"], "to_stage": "processed"})
     assert status == 200, body
+    assert body["current"]["stage"] == "processed"
+    stages = [r["stage"] for r in hq.get("/intake-agent-v2/lifecycle")[1]]
+    assert stages == ["received", "validated", "queued", "processed"]
 
 
 def test_transition_audit_actor_reflects_who_moved_it(hq):

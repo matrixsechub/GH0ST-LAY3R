@@ -931,6 +931,8 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                 )
                 return
 
+            # Resolve the audit actor before any state changes.
+            actor_id = _registered_operator_id() if by_operator else "system"
             now = _now()
             new_record: dict = {
                 "id": str(uuid.uuid4()),
@@ -948,7 +950,7 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             _intake_lifecycle.append(new_record)
             _write_audit(
                 "intake.stage_changed",
-                actor_id=_registered_operator_id() if by_operator else "system",
+                actor_id=actor_id,
                 actor_type="operator" if by_operator else "system",
                 target_id=new_record["id"],
                 target_type="intake-lifecycle",
