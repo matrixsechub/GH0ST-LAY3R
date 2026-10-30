@@ -76,10 +76,12 @@ class OperatorEntry:
 @dataclass
 class EscalationEvent:
     """
-    Describes one escalation raised under the HITL Governance Layer. Schema
-    only — no code in this repo creates, stores, transitions, or resolves
-    these. See AGENT_HQ.md's "Escalation Lifecycle" section for the state
-    machine and the GOV-n -> severity mapping.
+    Describes one escalation raised under the HITL Governance Layer. The
+    engine never creates these; only the dev-grade scripts/serve.py does,
+    in memory (GOV-3 auto-escalation, and the operator's intake actions,
+    which also resolve and dismiss them). See AGENT_HQ.md's "Escalation
+    Lifecycle" section for the state machine and the GOV-n -> severity
+    mapping.
     """
 
     id: str

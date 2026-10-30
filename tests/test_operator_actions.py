@@ -8,6 +8,10 @@ re-registration guards that would otherwise bypass an escalation, and audit.
 
 from __future__ import annotations
 
+import http.client
+import json
+from urllib.parse import urlparse
+
 import pytest
 
 import scripts.serve as serve
@@ -60,6 +64,20 @@ def _record_at(hq, stage: str) -> dict:
     return record
 
 
+def _raw_post(hq, path: str, raw: bytes, headers: dict) -> tuple[int, dict]:
+    """POST with exact bytes and headers (urllib would fix up Content-Length)."""
+    url = urlparse(hq.base)
+    conn = http.client.HTTPConnection(url.hostname, url.port, timeout=5)
+    conn.putrequest("POST", path)
+    for name, value in headers.items():
+        conn.putheader(name, value)
+    conn.endheaders()
+    if raw:
+        conn.send(raw)
+    resp = conn.getresponse()
+    return resp.status, json.loads(resp.read().decode())
+
+
 def _snapshot(hq) -> tuple:
     return (hq.get("/intake-agent-v2/lifecycle")[1], hq.get("/audit")[1],
             hq.get("/escalations")[1])
@@ -96,6 +114,23 @@ def test_rejects_missing_or_wrong_token_without_side_effects(hq, headers):
 
 def test_auth_checked_before_input_validation(hq):
     status, _ = hq.post(ACTION, {}, {"Authorization": "Bearer wrong"})
+    assert status == 401
+
+
+@pytest.mark.parametrize("scheme", ["bearer", "BEARER", "Bearer"])
+def test_bearer_scheme_is_case_insensitive(hq, scheme):
+    record = _register(hq)
+    status, body = _act(hq, record["id"], "approve", headers={"Authorization": f"{scheme} {TOKEN}"})
+    assert status == 200, body
+
+
+def test_auth_checked_before_body_is_read(hq):
+    # An oversized body from an unauthenticated caller is refused on auth
+    # alone; the server never reads it.
+    status, body = _raw_post(hq, ACTION, b"", {
+        "Content-Type": "application/json",
+        "Content-Length": str(serve.MAX_BODY_BYTES * 100),
+    })
     assert status == 401
 
 
@@ -188,6 +223,25 @@ def test_escalate_opens_escalation_and_review_mode(hq):
     assert hq.get("/marketplace")[1]["mode"] == "review"
     assert hq.get("/hq/health")[1]["open_escalation_count"] == 1
     assert hq.get("/hq/health")[1]["intake_escalated_count"] == 1
+
+
+@pytest.mark.parametrize("action, status", [("approve", "resolved"), ("close", "dismissed")])
+def test_approve_or_close_ends_escalations_opened_outside_the_intake_flow(hq, action, status):
+    # An escalation for the intent can exist while the intake is still
+    # "received" (e.g. a GOV-3 escalation keyed to the same intent id).
+    record = _register(hq)
+    with serve._lock:
+        serve._escalations.append({
+            "id": "gov3-esc", "type": "escalation", "trigger_rule": "GOV-3",
+            "intent_id": record["intent_id"], "severity": "high", "reason": "high-risk tag",
+            "agent_ids": [], "status": "pending", "created_at": "t",
+            "resolved_at": None, "resolution": "",
+        })
+
+    body = _ok(hq, record["id"], action)
+
+    assert [(e["id"], e["status"]) for e in body["escalations"]] == [("gov3-esc", status)]
+    assert hq.get("/hq/health")[1]["open_escalation_count"] == 0
 
 
 def test_escalate_defaults_to_high_severity(hq):
@@ -324,6 +378,75 @@ def test_escalation_lifecycle_audit(hq):
             for e in changed] == [(esc_id, "pending", "dismissed")]
     actions = hq.get("/audit?event_type=intake.operator_action")[1]
     assert [a["payload"]["escalation_ids"] for a in actions] == [[esc_id], [esc_id]]
+
+
+# ---------------------------------------------------------------------------
+# Request hardening
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("path", ["/api/register", TRANSITION, ACTION, "/intents"])
+@pytest.mark.parametrize("raw", [b"[1, 2]", b'"text"', b"42", b"null"])
+def test_non_object_json_body_is_rejected(hq, path, raw):
+    status, body = _raw_post(hq, path, raw, {
+        "Content-Type": "application/json", "Content-Length": str(len(raw)), **AUTH,
+    })
+    assert status == 400
+    assert "JSON object" in body["error"]
+
+
+@pytest.mark.parametrize("path, payload, field", [
+    (ACTION, {"lifecycle_id": "x", "action": ["approve"]}, "action"),
+    (ACTION, {"lifecycle_id": ["x"], "action": "approve"}, "lifecycle_id"),
+    (ACTION, {"lifecycle_id": "x", "action": "annotate", "notes": 123}, "notes"),
+    (ACTION, {"lifecycle_id": "x", "action": "reassign", "lane": {"a": 1}}, "lane"),
+    (ACTION, {"lifecycle_id": "x", "action": "escalate", "severity": ["high"]}, "severity"),
+    (TRANSITION, {"lifecycle_id": "x", "to_stage": ["validated"]}, "to_stage"),
+    (TRANSITION, {"lifecycle_id": "x", "to_stage": "validated", "notes": 1}, "notes"),
+    ("/api/register", {"raw": "x", "notes": 5}, "notes"),
+    ("/api/register", {"raw": "x", "intent_id": 7}, "intent_id"),
+])
+def test_non_string_fields_are_rejected(hq, path, payload, field):
+    before = _snapshot(hq)
+    status, body = hq.post(path, payload, AUTH)
+    assert status == 400
+    assert body["error"] == f"'{field}' must be a string"
+    assert _snapshot(hq) == before
+
+
+def test_oversized_body_is_rejected_unread(hq):
+    status, body = _raw_post(hq, "/api/register", b"", {
+        "Content-Type": "application/json",
+        "Content-Length": str(serve.MAX_BODY_BYTES + 1),
+    })
+    assert status == 413
+
+
+def test_invalid_content_length_is_rejected(hq):
+    status, body = _raw_post(hq, "/api/register", b"", {"Content-Length": "abc"})
+    assert status == 400
+    assert "Content-Length" in body["error"]
+
+
+# ---------------------------------------------------------------------------
+# Counts ignore same-stage records
+# ---------------------------------------------------------------------------
+
+def test_annotate_and_reassign_do_not_inflate_counts(hq):
+    received = _register(hq)
+    for _ in range(3):
+        received = _ok(hq, received["id"], "annotate", notes="n")["current"]
+    escalated = _ok(hq, received["id"], "escalate")["current"]
+    _ok(hq, escalated["id"], "reassign", lane="adversarial-intel")
+    _ok(hq, hq.get("/intake-agent-v2/lifecycle")[1][-1]["id"], "annotate", notes="n")
+
+    health = hq.get("/hq/health")[1]
+    assert (health["intake_received_count"], health["intake_escalated_count"]) == (1, 1)
+    metrics = hq.get("/intake-agent-v2/metrics")[1]
+    assert (metrics["received_count"], metrics["escalated_count"], metrics["total"]) == (1, 1, 2)
+    panel = hq.get("/cockpit/intake")[1]
+    assert panel["stage_counts"] == {"received": 1, "escalated": 1}
+    assert len(panel["last_10_submissions"]) == 1
+    assert len(panel["lifecycle_timeline"]) == 7      # the full history is still there
 
 
 @pytest.mark.parametrize("tags, volatility", [(["high-risk"], 0.9), ([], 0.1)])

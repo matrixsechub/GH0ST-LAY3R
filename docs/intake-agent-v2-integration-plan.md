@@ -103,19 +103,22 @@ Any other action/stage pair is rejected with 422 and no side effects.
 
 **Operator-only.** The caller must send `Authorization: Bearer <token>`
 matching the `GHOST_OPERATOR_TOKEN` environment variable the server was
-started with (constant-time comparison). If the variable is unset, the
-endpoint returns 403 for everyone (fails closed); a missing or wrong token
-returns 401. Actions are recorded as performed by the registered operator
-(`lupe`).
+started with (constant-time comparison; the `Bearer` scheme name is
+case-insensitive). The token is checked before the request body is read. If
+the variable is unset, the endpoint returns 403 for everyone (fails
+closed); a missing or wrong token returns 401. Actions are recorded as
+performed by the registered operator (`lupe`). The token travels over
+plain HTTP, so `serve.py` warns at startup when a token is set and it is
+bound to a non-loopback address.
 
 **Escalation linkage.** `escalate` opens a `pending` `EscalationEvent` for
 the intent (`trigger_rule: "operator-manual"`, `severity` from the request,
 default `high`, `agent_ids: ["intake-agent-v2"]`). It appears in
-`GET /escalations` and `HQHealthRecord.open_escalation_count`. Leaving
-`escalated` closes every open escalation for that intent: `approve` marks
-them `resolved` (action taken) and `close` marks them `dismissed` (no action
-needed), per the Escalation Lifecycle in `AGENT_HQ.md`. `reassign` and
-`annotate` leave them open. `operator-manual` is not a GOV-n rule: no
+`GET /escalations` and `HQHealthRecord.open_escalation_count`. `approve`
+and `close` end every open escalation for the intent, from any stage:
+`approve` marks them `resolved` (action taken) and `close` marks them
+`dismissed` (no action needed), per the Escalation Lifecycle in
+`AGENT_HQ.md`. `reassign` and `annotate` leave them open. `operator-manual` is not a GOV-n rule: no
 existing rule covers an operator escalating by hand.
 
 Each action appends an `IntakeLifecycleRecord` with `operator_action` set
@@ -142,7 +145,8 @@ IntakeOperatorAction = Literal["approve", "escalate", "close", "reassign", "anno
 
 ### IntakeLifecycleRecord dataclass
 Fields: `id`, `intent_id`, `stage`, `created_at`, `updated_at`, `source`,
-`operator_action` (Optional), `operator_notes`, `resolved_at` (Optional).
+`operator_action` (Optional), `operator_notes`, `assigned_lane` (set by
+`reassign`, carried forward), `resolved_at` (Optional).
 `type` discriminator: `"intake-lifecycle"`. Added to `RegistryRecord` union.
 
 ### HQHealthRecord intake fields (additive, all default to 0)
@@ -202,8 +206,10 @@ Returns a metrics snapshot:
   "total": <int>
 }
 ```
-Counts are records per stage, not intents per current stage: one intent
-walked to `processed` contributes one record to each of the four TTX stages.
+Counts are stage entries, not intents per current stage: one intent
+walked to `processed` counts once in each of the four TTX stages. Records
+that keep an intent in the same stage (`annotate`, `reassign`) are not
+counted; `total` is the sum of the stage counts.
 The same counts are surfaced in `HQHealthRecord`'s `intake_*_count` fields.
 
 ### POST /api/register
@@ -225,9 +231,14 @@ Header: `Authorization: Bearer <GHOST_OPERATOR_TOKEN>`. Body:
 "severity"?: "low|medium|high|critical"}`. Returns 200 with
 `{"previous", "current", "escalations", "marketplace"}` (`escalations` lists
 the escalation records opened or closed by this action). Errors: 401/403
-(auth, checked first), 400 (missing fields, empty `notes` for `annotate`,
-empty `lane` for `reassign`, bad `severity`), 404 (unknown record), 409
-(stale record), 422 (unknown action, or action not allowed from the stage).
+(auth, checked first), 400 (missing or non-string fields, empty `notes` for
+`annotate`, empty `lane` for `reassign`, bad `severity`), 404 (unknown
+record), 409 (stale record), 422 (unknown action, or action not allowed from
+the stage).
+
+All POST endpoints reject a body that is not a JSON object (400), a
+non-numeric `Content-Length` (400), or a body over 64 KiB (413, not read);
+string fields must be strings (400).
 
 ### GET /cockpit/intake
 Read-only: agent status, GOV-4 status, routing-table entry count, per-stage

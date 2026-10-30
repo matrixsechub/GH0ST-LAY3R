@@ -301,6 +301,9 @@ _ESCALATION_SEVERITIES = ("low", "medium", "high", "critical")
 # Shared secret for operator actions. Unset = operator actions disabled (fail closed).
 OPERATOR_TOKEN_ENV = "GHOST_OPERATOR_TOKEN"
 
+# Largest POST body accepted; larger requests get 413 without being read.
+MAX_BODY_BYTES = 64 * 1024
+
 
 # ---------------------------------------------------------------------------
 # Utility helpers
@@ -353,9 +356,34 @@ def _operator_auth_error(authorization: str) -> tuple[int, str] | None:
     if not expected:
         return 403, f"Operator actions are disabled: {OPERATOR_TOKEN_ENV} is not set on the server"
     scheme, _, token = authorization.partition(" ")
-    if scheme != "Bearer" or not hmac.compare_digest(token.encode(), expected.encode()):
+    # Auth scheme names are case-insensitive (RFC 7235 §2.1).
+    if scheme.lower() != "bearer" or not hmac.compare_digest(token.encode(), expected.encode()):
         return 401, "Operator authentication required: send 'Authorization: Bearer <token>'"
     return None
+
+
+def _non_string_field(body: dict, *names: str) -> str | None:
+    """Name of the first present field in `names` whose value is not a string."""
+    for name in names:
+        if name in body and not isinstance(body[name], str):
+            return name
+    return None
+
+
+def _stage_entries() -> list:
+    """
+    Lifecycle records that moved their intent into a new stage (the first
+    record of each intent plus every stage change). Same-stage records from
+    annotate / reassign are excluded so they don't inflate stage counts.
+    Caller must hold _lock.
+    """
+    entries, last_stage = [], {}
+    for record in _intake_lifecycle:
+        intent_id, stage = record.get("intent_id"), record.get("stage")
+        if last_stage.get(intent_id) != stage:
+            entries.append(record)
+        last_stage[intent_id] = stage
+    return entries
 
 
 def _marketplace_state(latest_stage: str | None) -> dict:
@@ -443,8 +471,10 @@ def _compute_hq_health() -> dict:
     open_escalation_count = sum(
         1 for e in _escalations if e.get("status") in ("pending", "acknowledged")
     )
+    entries = _stage_entries()
+
     def _stage_count(stage: str) -> int:
-        return sum(1 for r in _intake_lifecycle if r.get("stage") == stage)
+        return sum(1 for r in entries if r.get("stage") == stage)
 
     return {
         "type": "hq-health",
@@ -598,12 +628,29 @@ class GhostHQHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path, _ = _parse_path(self.path)
-        length = int(self.headers.get("Content-Length", 0))
+        # Operator auth runs before the body is read, so an unauthenticated
+        # caller cannot make the server buffer or parse anything.
+        if path == "/intake-agent-v2/lifecycle/action":
+            auth_error = _operator_auth_error(self.headers.get("Authorization", ""))
+            if auth_error:
+                _send_error(self, *auth_error)
+                return
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            _send_error(self, 400, "Invalid Content-Length")
+            return
+        if length > MAX_BODY_BYTES:
+            _send_error(self, 413, f"Request body exceeds {MAX_BODY_BYTES} bytes")
+            return
         raw_body = self.rfile.read(length) if length > 0 else b"{}"
         try:
             body: dict = json.loads(raw_body or b"{}")
         except json.JSONDecodeError:
             _send_error(self, 400, "Invalid JSON body")
+            return
+        if not isinstance(body, dict):
+            _send_error(self, 400, "Request body must be a JSON object")
             return
 
         if path == "/intents":
@@ -724,6 +771,10 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         intake.stage_changed AuditEvent, and returns the record.
         No auth — this is the unauthenticated public → intake boundary.
         """
+        bad_field = _non_string_field(body, "source", "raw", "intent_id", "notes")
+        if bad_field:
+            _send_error(self, 400, f"'{bad_field}' must be a string")
+            return
         source = body.get("source", "public")
         raw = body.get("raw", "")
         intent_id = body.get("intent_id") or str(uuid.uuid4())
@@ -799,6 +850,10 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         Validates the transition against _INTAKE_VALID_TRANSITIONS and
         appends a new IntakeLifecycleRecord (append-only; does not mutate).
         """
+        bad_field = _non_string_field(body, "lifecycle_id", "to_stage", "notes")
+        if bad_field:
+            _send_error(self, 400, f"'{bad_field}' must be a string")
+            return
         lifecycle_id = body.get("lifecycle_id", "")
         to_stage = body.get("to_stage", "")
         notes = body.get("notes", "")
@@ -873,12 +928,13 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         Body: {"lifecycle_id": "...", "action": "approve|escalate|close|reassign|annotate",
                "notes"?: "...", "lane"?: "..." (reassign), "severity"?: "..." (escalate)}
         Appends a new IntakeLifecycleRecord with operator_action set (append-only).
-        escalate opens an EscalationEvent for the intent; approve / close from
-        "escalated" resolve / dismiss its open escalations.
+        escalate opens an EscalationEvent for the intent; approve / close
+        resolve / dismiss its open escalations.
+        Operator auth is enforced in do_POST before the body is read.
         """
-        auth_error = _operator_auth_error(self.headers.get("Authorization", ""))
-        if auth_error:
-            _send_error(self, *auth_error)
+        bad_field = _non_string_field(body, "lifecycle_id", "action", "notes", "lane", "severity")
+        if bad_field:
+            _send_error(self, 400, f"'{bad_field}' must be a string")
             return
 
         lifecycle_id = body.get("lifecycle_id", "")
@@ -893,10 +949,10 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         if action not in _OPERATOR_ACTIONS:
             _send_error(self, 422, f"Unknown action '{action}'. Valid actions: {sorted(_OPERATOR_ACTIONS)}")
             return
-        if action == "annotate" and not str(notes).strip():
+        if action == "annotate" and not notes.strip():
             _send_error(self, 400, "'notes' is required for annotate")
             return
-        if action == "reassign" and not str(lane).strip():
+        if action == "reassign" and not lane.strip():
             _send_error(self, 400, "'lane' is required for reassign")
             return
         if action == "escalate" and severity not in _ESCALATION_SEVERITIES:
@@ -973,7 +1029,9 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                     payload={"trigger_rule": "operator-manual", "severity": severity,
                              "intake_record_id": new_record["id"]},
                 )
-            elif from_stage == "escalated" and to_stage != "escalated":
+            elif action in ("approve", "close"):
+                # Any open escalation for the intent ends when the operator
+                # approves or closes it, whatever stage it was in.
                 # Spec: resolved = action taken; dismissed = no action needed.
                 new_status = "resolved" if action == "approve" else "dismissed"
                 for esc in _escalations:
@@ -1040,8 +1098,9 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         Called under do_GET's _lock — do not re-acquire.
         """
         records = list(_intake_lifecycle)
+        entries = _stage_entries()
         metrics = {}
-        for r in records:
+        for r in entries:
             s = r.get("stage", "unknown")
             metrics[s] = metrics.get(s, 0) + 1
 
@@ -1059,7 +1118,7 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             "stage_counts": metrics,
             "lifecycle_timeline": records,
             "last_10_submissions": [
-                r for r in records if r.get("stage") == "received"
+                r for r in entries if r.get("stage") == "received"
             ][-10:],
             "note": (
                 "Read-only panel. Operator actions: POST /intake-agent-v2/lifecycle/action "
@@ -1068,7 +1127,7 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         })
 
     def _get_intake_metrics(self) -> None:
-        records = list(_intake_lifecycle)
+        records = _stage_entries()
         by_stage: dict = {}
         for r in records:
             s = r.get("stage", "unknown")
@@ -1116,6 +1175,10 @@ def main() -> None:
     print(f"[SERVE] State:    in-memory only (cleared on restart)")
     operator_actions = "enabled" if os.environ.get(OPERATOR_TOKEN_ENV) else f"disabled (set {OPERATOR_TOKEN_ENV})"
     print(f"[SERVE] Operator actions: {operator_actions}")
+    loopback = args.host in ("localhost", "::1") or args.host.startswith("127.")
+    if os.environ.get(OPERATOR_TOKEN_ENV) and not loopback:
+        print(f"[SERVE] WARNING: binding {args.host} over plain HTTP — the operator token "
+              "is visible to anyone who can observe this network traffic.")
     print()
 
     server = ThreadingHTTPServer((args.host, args.port), GhostHQHandler)
