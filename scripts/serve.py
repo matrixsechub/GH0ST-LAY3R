@@ -327,6 +327,9 @@ OPERATOR_TOKEN_ENV = "GHOST_OPERATOR_TOKEN"
 # Largest POST body accepted; larger requests get 413 without being read.
 MAX_BODY_BYTES = 64 * 1024
 
+# Seconds a connection may stall on a read before it is dropped.
+REQUEST_TIMEOUT_SECONDS = 10
+
 # Non-empty = operator actions refused with this message. main() sets it when
 # the server binds a non-loopback address without --allow-insecure-operator,
 # because the token would cross the network in plain HTTP.
@@ -668,6 +671,11 @@ def _parse_path(raw_path: str) -> tuple[str, dict]:
 
 class GhostHQHandler(BaseHTTPRequestHandler):
 
+    # Socket timeout per connection: a client that stalls mid-request (e.g.
+    # declares a body and never sends it) is dropped instead of holding a
+    # server thread forever. http.server closes the connection on timeout.
+    timeout = REQUEST_TIMEOUT_SECONDS
+
     def log_message(self, fmt: str, *args) -> None:
         # Replace Apache combined log format with a compact single line.
         # args: (request_line, response_code, response_size)
@@ -799,7 +807,9 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         raw_body = self.rfile.read(length) if length > 0 else b"{}"
         try:
             body = json.loads(raw_body or b"{}")
-        except json.JSONDecodeError:
+        except (ValueError, RecursionError):
+            # ValueError covers malformed JSON and invalid UTF-8;
+            # RecursionError covers pathologically deep nesting.
             _send_error(self, 400, "Invalid JSON body")
             return None
         if not isinstance(body, dict):
@@ -1324,20 +1334,26 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                 for esc in _escalations:
                     if esc.get("intent_id") != intent_id or esc.get("status") not in ("pending", "acknowledged"):
                         continue
-                    old_status = esc["status"]
-                    esc["status"] = new_status
+                    # Follow _ESCALATION_TRANSITIONS: resolving a pending
+                    # escalation passes through acknowledged first.
+                    steps = [new_status]
+                    if new_status not in _ESCALATION_TRANSITIONS[esc["status"]]:
+                        steps = ["acknowledged", new_status]
+                    for step in steps:
+                        old_status = esc["status"]
+                        esc["status"] = step
+                        _write_audit(
+                            "escalation.status_changed",
+                            actor_id=op_id,
+                            actor_type="operator",
+                            target_id=esc["id"],
+                            target_type="escalation",
+                            payload={"from_status": old_status, "status": step,
+                                     "intake_record_id": new_record["id"]},
+                        )
                     esc["resolved_at"] = now
                     esc["resolution"] = f"{action}: {notes}" if notes else action
                     touched.append(esc)
-                    _write_audit(
-                        "escalation.status_changed",
-                        actor_id=op_id,
-                        actor_type="operator",
-                        target_id=esc["id"],
-                        target_type="escalation",
-                        payload={"from_status": old_status, "status": new_status,
-                                 "intake_record_id": new_record["id"]},
-                    )
 
             _write_audit(
                 "intake.operator_action",
