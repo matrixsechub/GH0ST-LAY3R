@@ -4,7 +4,7 @@ Ghost Layer Studio — HQ HTTP Server (dev-grade)
 Responsibilities:
 - Thin HTTP interface over GhostLayerEngine for local development and integration
 - Implements a subset of API_CONTRACT.md v2 endpoints called by ttx-operator-shell
-- Python stdlib only: http.server, json, uuid, datetime, threading, urllib.parse
+- Python stdlib only: http.server, json, uuid, datetime, threading, urllib.parse, hmac
 - In-memory state: AuditEvent, EscalationEvent, OperatorSessionRecord, AgentPool lists
 - No persistence — state clears on restart; persistence is MSHOPS.NET's concern
 
@@ -26,6 +26,8 @@ Endpoints:
     POST /api/register                     — submit intake; creates IntakeLifecycleRecord stage=received
     GET  /marketplace                      — lifecycle-aware banner (observer/full/review mode)
     POST /intake-agent-v2/lifecycle/transition — advance stage: received→validated→queued→processed
+    POST /intake-agent-v2/lifecycle/action — operator-only (Bearer GHOST_OPERATOR_TOKEN):
+                                             approve / escalate / close / reassign / annotate
     GET  /cockpit/intake                   — read-only panel stub (status, timeline, last 10 submissions)
 
 GOV-4 note: This file is a bounded, operator-approved relaxation of the
@@ -36,6 +38,7 @@ See CLAUDE.md "Running things" for the authorised scope.
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import os
 import sys
@@ -275,12 +278,28 @@ _routing_table: list = [
 ]
 
 # Valid stage transitions for the TTX intake flow (received→validated→queued→processed).
-# Escalation transitions are future work — not implemented in this rev.
+# Moving into or out of "escalated" is operator-only — see _OPERATOR_ACTIONS.
 _INTAKE_VALID_TRANSITIONS: dict = {
     "received":  {"validated"},
     "validated": {"queued"},
     "queued":    {"processed"},
 }
+
+# Operator actions: action -> {from_stage: to_stage}. A stage missing from an
+# action's map means the action is not allowed from that stage. "processed"
+# is terminal except for annotate. See docs/intake-agent-v2-integration-plan.md.
+_OPEN_INTAKE_STAGES = ("received", "validated", "queued", "escalated")
+_OPERATOR_ACTIONS: dict = {
+    "approve":  {"received": "validated", "escalated": "validated"},
+    "escalate": {"received": "escalated", "validated": "escalated", "queued": "escalated"},
+    "close":    {stage: "processed" for stage in _OPEN_INTAKE_STAGES},
+    "reassign": {"escalated": "escalated"},
+    "annotate": {stage: stage for stage in (*_OPEN_INTAKE_STAGES, "processed")},
+}
+_ESCALATION_SEVERITIES = ("low", "medium", "high", "critical")
+
+# Shared secret for operator actions. Unset = operator actions disabled (fail closed).
+OPERATOR_TOKEN_ENV = "GHOST_OPERATOR_TOKEN"
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +337,25 @@ def _check_routing_table(tags: list) -> list:
         if tag_set.intersection(entry.get("match_tags", [])):
             matched.append(entry)
     return matched
+
+
+def _latest_intake_record(intent_id: str) -> dict | None:
+    """Most recently appended lifecycle record for an intent. Caller must hold _lock."""
+    for record in reversed(_intake_lifecycle):
+        if record.get("intent_id") == intent_id:
+            return record
+    return None
+
+
+def _operator_auth_error(authorization: str) -> tuple[int, str] | None:
+    """Return (status, message) if the caller is not the operator, else None."""
+    expected = os.environ.get(OPERATOR_TOKEN_ENV, "")
+    if not expected:
+        return 403, f"Operator actions are disabled: {OPERATOR_TOKEN_ENV} is not set on the server"
+    scheme, _, token = authorization.partition(" ")
+    if scheme != "Bearer" or not hmac.compare_digest(token.encode(), expected.encode()):
+        return 401, "Operator authentication required: send 'Authorization: Bearer <token>'"
+    return None
 
 
 def _marketplace_state(latest_stage: str | None) -> dict:
@@ -520,7 +558,7 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header(
             "Access-Control-Allow-Headers",
-            "Content-Type, X-Ghost-Operator-Online",
+            "Content-Type, Authorization, X-Ghost-Operator-Online",
         )
         self.end_headers()
 
@@ -574,6 +612,8 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             self._post_register(body)
         elif path == "/intake-agent-v2/lifecycle/transition":
             self._post_lifecycle_transition(body)
+        elif path == "/intake-agent-v2/lifecycle/action":
+            self._post_operator_action(body)
         else:
             _send_error(self, 404, f"No route: {path}")
 
@@ -704,10 +744,16 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             "source": source,
             "operator_action": None,
             "operator_notes": notes,
+            "assigned_lane": "",
             "resolved_at": None,
         }
 
         with _lock:
+            # Re-registering an existing intent would put a fresh "received"
+            # record on top of its chain, undoing an escalation.
+            if _latest_intake_record(intent_id) is not None:
+                _send_error(self, 409, f"Intent already registered: {intent_id}")
+                return
             _intake_lifecycle.append(record)
             _write_audit(
                 "intake.stage_changed",
@@ -768,6 +814,12 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             if source_record is None:
                 _send_error(self, 404, f"No lifecycle record: {lifecycle_id}")
                 return
+            # Only the newest record of an intent may advance; an older id
+            # would fork the chain (e.g. re-validate an escalated intake).
+            latest = _latest_intake_record(source_record.get("intent_id", ""))
+            if latest is not source_record:
+                _send_error(self, 409, f"Stale lifecycle record; latest is {latest['id']}")
+                return
 
             from_stage = source_record.get("stage", "")
             allowed = _INTAKE_VALID_TRANSITIONS.get(from_stage, set())
@@ -790,6 +842,7 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                 "source": source_record.get("source", ""),
                 "operator_action": None,
                 "operator_notes": notes,
+                "assigned_lane": source_record.get("assigned_lane", ""),
                 "resolved_at": now if to_stage == "processed" else None,
             }
             _intake_lifecycle.append(new_record)
@@ -810,6 +863,172 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         _send_json(self, 200, {
             "previous": source_record,
             "current": new_record,
+            "marketplace": _marketplace_state(to_stage),
+        })
+
+    def _post_operator_action(self, body: dict) -> None:
+        """
+        POST /intake-agent-v2/lifecycle/action — operator-only.
+        Header: Authorization: Bearer <GHOST_OPERATOR_TOKEN>
+        Body: {"lifecycle_id": "...", "action": "approve|escalate|close|reassign|annotate",
+               "notes"?: "...", "lane"?: "..." (reassign), "severity"?: "..." (escalate)}
+        Appends a new IntakeLifecycleRecord with operator_action set (append-only).
+        escalate opens an EscalationEvent for the intent; approve / close from
+        "escalated" resolve / dismiss its open escalations.
+        """
+        auth_error = _operator_auth_error(self.headers.get("Authorization", ""))
+        if auth_error:
+            _send_error(self, *auth_error)
+            return
+
+        lifecycle_id = body.get("lifecycle_id", "")
+        action = body.get("action", "")
+        notes = body.get("notes", "")
+        lane = body.get("lane", "")
+        severity = body.get("severity", "high")
+
+        if not lifecycle_id or not action:
+            _send_error(self, 400, "'lifecycle_id' and 'action' are required")
+            return
+        if action not in _OPERATOR_ACTIONS:
+            _send_error(self, 422, f"Unknown action '{action}'. Valid actions: {sorted(_OPERATOR_ACTIONS)}")
+            return
+        if action == "annotate" and not str(notes).strip():
+            _send_error(self, 400, "'notes' is required for annotate")
+            return
+        if action == "reassign" and not str(lane).strip():
+            _send_error(self, 400, "'lane' is required for reassign")
+            return
+        if action == "escalate" and severity not in _ESCALATION_SEVERITIES:
+            _send_error(self, 400, f"'severity' must be one of {list(_ESCALATION_SEVERITIES)}")
+            return
+
+        with _lock:
+            source_record = next(
+                (r for r in _intake_lifecycle if r.get("id") == lifecycle_id), None
+            )
+            if source_record is None:
+                _send_error(self, 404, f"No lifecycle record: {lifecycle_id}")
+                return
+            intent_id = source_record.get("intent_id", "")
+            latest = _latest_intake_record(intent_id)
+            if latest is not source_record:
+                _send_error(self, 409, f"Stale lifecycle record; latest is {latest['id']}")
+                return
+
+            from_stage = source_record.get("stage", "")
+            to_stage = _OPERATOR_ACTIONS[action].get(from_stage)
+            if to_stage is None:
+                _send_error(
+                    self, 422,
+                    f"Action '{action}' not allowed from stage '{from_stage}'. "
+                    f"Allowed from: {sorted(_OPERATOR_ACTIONS[action])}",
+                )
+                return
+
+            op_id = _registered_operator_id()
+            now = _now()
+            if from_stage == "processed":
+                resolved_at = source_record.get("resolved_at")
+            else:
+                resolved_at = now if to_stage == "processed" else None
+            new_record: dict = {
+                "id": str(uuid.uuid4()),
+                "type": "intake-lifecycle",
+                "intent_id": intent_id,
+                "stage": to_stage,
+                "created_at": now,
+                "updated_at": now,
+                "source": source_record.get("source", ""),
+                "operator_action": action,
+                "operator_notes": notes,
+                "assigned_lane": lane if action == "reassign" else source_record.get("assigned_lane", ""),
+                "resolved_at": resolved_at,
+            }
+            _intake_lifecycle.append(new_record)
+
+            touched: list = []
+            if action == "escalate":
+                esc: dict = {
+                    "id": str(uuid.uuid4()),
+                    "type": "escalation",
+                    "trigger_rule": "operator-manual",
+                    "intent_id": intent_id,
+                    "severity": severity,
+                    "reason": notes or "Escalated by operator from intake lifecycle.",
+                    "agent_ids": ["intake-agent-v2"],
+                    "status": "pending",
+                    "created_at": now,
+                    "resolved_at": None,
+                    "resolution": "",
+                }
+                _escalations.append(esc)
+                touched.append(esc)
+                _write_audit(
+                    "escalation.created",
+                    actor_id=op_id,
+                    actor_type="operator",
+                    target_id=esc["id"],
+                    target_type="escalation",
+                    payload={"trigger_rule": "operator-manual", "severity": severity,
+                             "intake_record_id": new_record["id"]},
+                )
+            elif from_stage == "escalated" and to_stage != "escalated":
+                # Spec: resolved = action taken; dismissed = no action needed.
+                new_status = "resolved" if action == "approve" else "dismissed"
+                for esc in _escalations:
+                    if esc.get("intent_id") != intent_id or esc.get("status") not in ("pending", "acknowledged"):
+                        continue
+                    old_status = esc["status"]
+                    esc["status"] = new_status
+                    esc["resolved_at"] = now
+                    esc["resolution"] = f"{action}: {notes}" if notes else action
+                    touched.append(esc)
+                    _write_audit(
+                        "escalation.status_changed",
+                        actor_id=op_id,
+                        actor_type="operator",
+                        target_id=esc["id"],
+                        target_type="escalation",
+                        payload={"from_status": old_status, "status": new_status,
+                                 "intake_record_id": new_record["id"]},
+                    )
+
+            _write_audit(
+                "intake.operator_action",
+                actor_id=op_id,
+                actor_type="operator",
+                target_id=new_record["id"],
+                target_type="intake-lifecycle",
+                payload={
+                    "intent_id": intent_id,
+                    "action": action,
+                    "from_stage": from_stage,
+                    "stage": to_stage,
+                    "previous_record_id": lifecycle_id,
+                    "escalation_ids": [e["id"] for e in touched],
+                },
+            )
+            if to_stage != from_stage:
+                _write_audit(
+                    "intake.stage_changed",
+                    actor_id=op_id,
+                    actor_type="operator",
+                    target_id=new_record["id"],
+                    target_type="intake-lifecycle",
+                    payload={
+                        "intent_id": intent_id,
+                        "from_stage": from_stage,
+                        "stage": to_stage,
+                        "previous_record_id": lifecycle_id,
+                    },
+                )
+            escalations_out = [dict(e) for e in touched]
+
+        _send_json(self, 200, {
+            "previous": source_record,
+            "current": new_record,
+            "escalations": escalations_out,
             "marketplace": _marketplace_state(to_stage),
         })
 
@@ -842,7 +1061,10 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             "last_10_submissions": [
                 r for r in records if r.get("stage") == "received"
             ][-10:],
-            "note": "Read-only until GOV-4 lift. Operator actions available after promotion.",
+            "note": (
+                "Read-only panel. Operator actions: POST /intake-agent-v2/lifecycle/action "
+                f"(Bearer token from {OPERATOR_TOKEN_ENV})."
+            ),
         })
 
     def _get_intake_metrics(self) -> None:
@@ -892,6 +1114,8 @@ def main() -> None:
     print(f"[SERVE] Engine:   ghost-layer-core (GhostLayerEngine)")
     print(f"[SERVE] Base URL: http://{args.host}:{args.port}")
     print(f"[SERVE] State:    in-memory only (cleared on restart)")
+    operator_actions = "enabled" if os.environ.get(OPERATOR_TOKEN_ENV) else f"disabled (set {OPERATOR_TOKEN_ENV})"
+    print(f"[SERVE] Operator actions: {operator_actions}")
     print()
 
     server = ThreadingHTTPServer((args.host, args.port), GhostHQHandler)

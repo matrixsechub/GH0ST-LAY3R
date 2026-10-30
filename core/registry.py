@@ -325,6 +325,7 @@ class IntakeLifecycleRecord:
     source: str = ""             # origin of the intent (operator, system, etc.)
     operator_action: Optional[IntakeOperatorAction] = None
     operator_notes: str = ""
+    assigned_lane: str = ""      # set by the operator's "reassign" action; carried forward
     resolved_at: Optional[str] = None
     type: Literal["intake-lifecycle"] = "intake-lifecycle"
 

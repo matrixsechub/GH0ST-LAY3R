@@ -47,8 +47,12 @@ received ──► validated ──► queued ──► processed
 ```
 
 Every other transition (skipping a stage, going backwards, leaving
-`processed`, or entering `escalated`) is rejected with HTTP 422 and leaves
-state and the audit log untouched.
+`processed`, or entering or leaving `escalated`) is rejected with HTTP 422
+and leaves state and the audit log untouched. Only the newest record of an
+intent can be advanced (an older `lifecycle_id` gets 409), and an
+`intent_id` can be registered only once (409), so a chain can never be
+forked or restarted. Moving into and out of `escalated` is operator-only —
+see §4.
 
 | Stage        | Status       | Meaning                                                  |
 |--------------|--------------|----------------------------------------------------------|
@@ -56,7 +60,7 @@ state and the audit log untouched.
 | `validated`  | implemented  | Passed initial checks; grants full marketplace access    |
 | `queued`     | implemented  | Waiting in the processing queue                          |
 | `processed`  | implemented  | Intake flow finished; `resolved_at` is set               |
-| `escalated`  | schema only  | Operator review (future — no transition reaches it yet)  |
+| `escalated`  | implemented  | Operator review; reached only via the `escalate` action  |
 | `processing` | schema only  | Pre-TTX stage, kept for schema compatibility             |
 | `completed`  | schema only  | Pre-TTX stage, kept for schema compatibility             |
 
@@ -74,7 +78,7 @@ leaves the previous record unchanged, and writes an `AuditEvent` with
 |--------------------------------------|------------|----------|--------|
 | none, `received`, `queued`, `processed` | `observer` | `false`  | "IntakeAgentV2: Access Pending — You are in Observer Mode." |
 | `validated`                          | `full`     | `true`   | none |
-| `escalated` (future)                 | `review`   | `false`  | "IntakeAgentV2: Operator Review in Progress — Access suspended pending resolution." |
+| `escalated`                          | `review`   | `false`  | "IntakeAgentV2: Operator Review in Progress — Access suspended pending resolution." |
 
 There is no identity layer, so this is one global state for the server,
 not per-user.
@@ -83,24 +87,41 @@ not per-user.
 
 ## 4. Operator Actions
 
-**Status: schema only — not implemented.** No endpoint accepts operator
-actions yet, and `operator_action` is always `null` on records written by
-`serve.py`. This section is the design target for the next pass.
+Implemented by `POST /intake-agent-v2/lifecycle/action` (§6), enforced by
+`_OPERATOR_ACTIONS` in `scripts/serve.py`. `IntakeOperatorAction` is
+defined in `core/registry.py`.
 
-`IntakeOperatorAction` (defined in `core/registry.py`):
+| Action     | Allowed from                         | Result                                   |
+|------------|--------------------------------------|------------------------------------------|
+| `approve`  | `received`, `escalated`              | → `validated` (full marketplace access)  |
+| `escalate` | `received`, `validated`, `queued`    | → `escalated`; opens an `EscalationEvent` |
+| `close`    | `received`, `validated`, `queued`, `escalated` | → `processed`; sets `resolved_at` |
+| `reassign` | `escalated`                          | stays `escalated`; sets `assigned_lane` (required `lane`) |
+| `annotate` | any stage, including `processed`     | no stage change (required `notes`)       |
 
-| Action     | Intended applicable stages     | Intended effect                   |
-|------------|-------------------------------|-----------------------------------|
-| `approve`  | received                      | Moves to `validated`             |
-| `escalate` | received, validated, queued   | Moves to `escalated`             |
-| `close`    | any open stage                | Moves to `processed`, notes why  |
-| `reassign` | escalated                     | Routes to a different lane/agent |
-| `annotate` | any stage                     | Adds operator notes, no transition|
+Any other action/stage pair is rejected with 422 and no side effects.
 
-When implemented, each action should append an `IntakeLifecycleRecord`
-(with `operator_action` set) and an `AuditEvent` with
-`event_type: "intake.operator_action"`, and must be restricted to the
-registered operator (GOV rules in `AGENT_HQ.md`).
+**Operator-only.** The caller must send `Authorization: Bearer <token>`
+matching the `GHOST_OPERATOR_TOKEN` environment variable the server was
+started with (constant-time comparison). If the variable is unset, the
+endpoint returns 403 for everyone (fails closed); a missing or wrong token
+returns 401. Actions are recorded as performed by the registered operator
+(`lupe`).
+
+**Escalation linkage.** `escalate` opens a `pending` `EscalationEvent` for
+the intent (`trigger_rule: "operator-manual"`, `severity` from the request,
+default `high`, `agent_ids: ["intake-agent-v2"]`). It appears in
+`GET /escalations` and `HQHealthRecord.open_escalation_count`. Leaving
+`escalated` closes every open escalation for that intent: `approve` marks
+them `resolved` (action taken) and `close` marks them `dismissed` (no action
+needed), per the Escalation Lifecycle in `AGENT_HQ.md`. `reassign` and
+`annotate` leave them open. `operator-manual` is not a GOV-n rule: no
+existing rule covers an operator escalating by hand.
+
+Each action appends an `IntakeLifecycleRecord` with `operator_action` set
+and writes an `intake.operator_action` audit event; actions that change the
+stage also write `intake.stage_changed`, and escalation changes write
+`escalation.created` / `escalation.status_changed`.
 
 The set of available actions for a given intent is returned by
 `IntakeAgentV2.run()` in the `operator_actions_available` field, reflecting
@@ -148,12 +169,14 @@ Endpoints added to `scripts/serve.py`:
 | POST | `/api/register` | Public intake submission → `received` record |
 | GET  | `/marketplace` | Access mode + banner from latest stage |
 | POST | `/intake-agent-v2/lifecycle/transition` | Advance one record one stage |
+| POST | `/intake-agent-v2/lifecycle/action` | Operator action (token required) |
 | GET  | `/cockpit/intake` | Read-only operator panel |
 
 > **Security:** `POST /api/register` and `POST /intake-agent-v2/lifecycle/transition`
 > have no authentication. Anyone who can reach the server can advance a
-> record to `validated` and unlock full marketplace access. Run `serve.py`
-> on localhost only (its default bind) until operator/session auth exists.
+> record from `received` to `validated` — the same result as the operator's
+> `approve` — and unlock full marketplace access. Only the operator action
+> endpoint is protected. Run `serve.py` on localhost only (its default bind).
 
 ### GET /agents/intake-agent-v2
 Returns the registry entry for `intake-agent-v2` from `_registry["agents"]`.
@@ -193,7 +216,18 @@ Returns `{"mode", "access", "banner", "latest_intake_stage", "total_submissions"
 ### POST /intake-agent-v2/lifecycle/transition
 Body: `{"lifecycle_id": "...", "to_stage": "...", "notes"?: "..."}`. Returns
 200 with `{"previous", "current", "marketplace"}`; 400 for missing fields;
-404 for an unknown `lifecycle_id`; 422 for a disallowed transition.
+404 for an unknown `lifecycle_id`; 409 if `lifecycle_id` is not the
+intent's newest record; 422 for a disallowed transition.
+
+### POST /intake-agent-v2/lifecycle/action
+Header: `Authorization: Bearer <GHOST_OPERATOR_TOKEN>`. Body:
+`{"lifecycle_id": "...", "action": "...", "notes"?: "...", "lane"?: "...",
+"severity"?: "low|medium|high|critical"}`. Returns 200 with
+`{"previous", "current", "escalations", "marketplace"}` (`escalations` lists
+the escalation records opened or closed by this action). Errors: 401/403
+(auth, checked first), 400 (missing fields, empty `notes` for `annotate`,
+empty `lane` for `reassign`, bad `severity`), 404 (unknown record), 409
+(stale record), 422 (unknown action, or action not allowed from the stage).
 
 ### GET /cockpit/intake
 Read-only: agent status, GOV-4 status, routing-table entry count, per-stage
@@ -211,7 +245,8 @@ Module-level state: `_intake_lifecycle` (append-only list of
 `intake_processing_count`, `intake_processed_count`,
 `intake_completed_count`, and `intake_escalated_count`.
 
-Regression coverage: `tests/test_intake_agent_v2.py`.
+Regression coverage: `tests/test_intake_agent_v2.py`,
+`tests/test_operator_actions.py`.
 
 `_REGISTRY_FALLBACK["agents"]` updated to include the `intake-agent-v2` entry
 matching `agents/registry.yaml`, so the endpoint is reachable even without PyYAML.
@@ -224,6 +259,8 @@ matching `agents/registry.yaml`, so the endpoint is reachable even without PyYAM
 |--------------------------|-----------------------------------------------|
 | `intake.stage_changed`   | Any lifecycle stage transition                |
 | `intake.operator_action` | Any operator action (approve/escalate/etc.)   |
+| `escalation.created`     | `escalate` action                             |
+| `escalation.status_changed` | `approve` / `close` from `escalated`       |
 
 These follow the existing dot-notation convention in `AuditEvent.event_type`.
 MSHOPS.NET's write path owns appending them to `_audit_log`; serve.py stubs

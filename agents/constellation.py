@@ -196,11 +196,11 @@ class IntakeAgentV2:
         if needs_escalation:
             stage = "escalated"
             operator_action_required = True
-            available_actions = ["escalate", "close", "reassign", "annotate"]
+            available_actions = ["approve", "close", "reassign", "annotate"]
         else:
             stage = "received"   # TTX initial stage; serve.py advances through transitions
             operator_action_required = False
-            available_actions = ["approve", "close", "annotate"]
+            available_actions = ["approve", "escalate", "close", "annotate"]
 
         return {
             "intake_status": "received",
