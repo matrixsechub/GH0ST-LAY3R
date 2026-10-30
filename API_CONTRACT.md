@@ -2,9 +2,12 @@
 
 > **Status: draft specification, not implemented.** This document
 > describes the HTTP API a future MSHOPS.NET backend service should
-> expose. No server code exists in this repo and none should be added
-> here — this repo defines the contract; MSHOPS.NET (a separate
-> service/repo) implements it. See `AGENT_HQ.md` for the underlying
+> expose. No production server code exists in this repo and none should
+> be added here — this repo defines the contract; MSHOPS.NET (a separate
+> service/repo) implements it. (`scripts/serve.py` is a dev-grade local
+> server implementing a subset of these endpoints plus the Intake Agent v2
+> bootstrap routes in `docs/intake-agent-v2-integration-plan.md`; it is
+> for local integration testing only.) See `AGENT_HQ.md` for the underlying
 > concepts (engine, agent, registry, operator, escalation, lane, mode,
 > status, severity, deployment, health, audit, pool) these endpoints
 > operate on.

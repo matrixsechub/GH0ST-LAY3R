@@ -6,9 +6,11 @@
 # Protocol, routing model, HITL Governance Layer, Escalation Lifecycle,
 # Agent Lifecycle & Deployment, Multi-Engine Coordination, Operator
 # Surfaces, HQ Health & Observability, and Agent Pools: AGENT_HQ.md.
-# Hand-maintained — nothing in this repo parses or enforces this file at
-# runtime. It is the data source a future MSHOPS.NET registry service
-# would import.
+# Hand-maintained. The engine never reads this file; the only reader is
+# the dev-grade scripts/serve.py, which serves it read-only via
+# GET /agents, /engines, /operators (with a hardcoded mirror,
+# _REGISTRY_FALLBACK, when PyYAML is absent — keep the two in sync). It is
+# the data source a future MSHOPS.NET registry service would import.
 #
 # v2 adds `type` discriminators and `capabilities` to engines/agents
 # (previously operator-only) and the EscalationEvent schema in
@@ -120,11 +122,12 @@ agents:
     tags: [intake, lifecycle, queue, operator-surface]
     capabilities: [intent-intake, queue-management, lifecycle-tracking, operator-action-hooks]
     description: >
-      Classifies intents into lifecycle stages (queued -> processing ->
-      escalated | completed) and tracks queue metrics for HQ observability.
-      v2 adds structured lifecycle events and operator-action hooks
-      (approve, escalate, close, reassign, annotate) surfaced through
-      ttx-operator-shell's HQ console. Status experimental: requires
+      Intake lifecycle agent (received -> validated -> queued ->
+      processed) with queue metrics for HQ observability. Routing-only:
+      scripts/serve.py routes intake, register, access-request, paywall,
+      and register-transition tags to it as audit metadata, but the agent
+      itself never runs. Operator-action hooks (approve, escalate, close,
+      reassign, annotate) are schema only. Status experimental: requires
       GOV-4 operator approval to promote to active and register with
       create_default_engine().
     produces:

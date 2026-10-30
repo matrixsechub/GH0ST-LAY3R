@@ -50,11 +50,14 @@ GH0ST-LAY3R/
 │   ├── output.py         # OutputReactor / OutputEnvelope: final output shaping
 │   └── registry.py       # Agent HQ registry schema (dataclasses only, no I/O) — see AGENT_HQ.md
 ├── agents/
-│   ├── constellation.py  # Agent protocol, AgentConstellation registry, 4 example agents
+│   ├── constellation.py  # Agent protocol, AgentConstellation, 4 default agents + IntakeAgentV2 (unregistered, GOV-4)
 │   └── registry.yaml     # Hand-maintained Agent HQ registry data (real agents/engine/operator only)
 ├── scripts/
 │   ├── run_demo.py       # CLI-style entrypoint that boots the engine and prints JSON output
 │   └── serve.py          # HQ HTTP server (dev-grade, stdlib only) — see "Running things"
+├── tests/                 # pytest suite (conftest.py starts serve.py in-process)
+├── docs/
+│   └── intake-agent-v2-integration-plan.md  # Intake Agent v2 lifecycle/routing spec
 ├── IMAGES/                # Diagram/banner assets referenced by README.md
 ├── README.md              # Aspirational "Ghost Layer Cosmology Engine" pitch (see gap note above)
 ├── AGENT_HQ.md            # Agent HQ protocol + routing model (design spec, not implemented)
@@ -64,8 +67,8 @@ GH0ST-LAY3R/
 └── LICENSE.txt            # MIT, Copyright Guadalupe Gallegos (MatrixSecHub)
 ```
 
-There is no `pyproject.toml`, `setup.py`, `requirements.txt`, test suite, or
-CI configuration in this repo. There are no `__init__.py` files — `core` and
+There is no `pyproject.toml`, `setup.py`, or `requirements.txt`. Tests live
+under `tests/` (pytest). There are no `__init__.py` files — `core` and
 `agents` work as implicit namespace packages only when the repo root is on
 `sys.path`.
 
@@ -88,7 +91,9 @@ CI configuration in this repo. There are no `__init__.py` files — `core` and
    `ContainmentAgent`, `OperatorDoctrineAgent`, and `RouteAdvisoryAgent`
    (advisory-only — suggests a generic routing "lane" via tag/volatility
    heuristics, without any real subsystem behind it; see "Extension point"
-   below).
+   below). A fifth class, `IntakeAgentV2`, is defined in the same file but
+   deliberately **not** registered in `create_default_engine()` — it is
+   `experimental` and gated by GOV-4 (operator approval); do not add it.
 4. **`DefaultOversoul`** (`core/oversoul.py`) — `absorb()` fuses agent
    outputs into one dict; `recurse()` recursively refines
    `spectral_density` up to `EngineConfig.max_recursion` (default 3).
@@ -144,7 +149,11 @@ PYTHONPATH=. python3 scripts/serve.py [--port 8000]   # HQ HTTP server (see belo
 `scripts/serve.py` starts a single-process, dev-grade HTTP server that wraps
 `GhostLayerEngine` and exposes a subset of `API_CONTRACT.md` v2 endpoints:
 `POST /intents`, `GET /hq/health`, `GET /audit`, `GET /escalations`,
-`GET /agents`, `GET /engines`, `GET /operators`, `GET /agent-pools`. Default
+`GET /agents`, `GET /engines`, `GET /operators`, `GET /agent-pools`, plus the
+Intake Agent v2 bootstrap routes (`POST /api/register`, `GET /marketplace`,
+`POST /intake-agent-v2/lifecycle/transition`, `GET /intake-agent-v2/lifecycle`,
+`GET /intake-agent-v2/metrics`, `GET /agents/intake-agent-v2`,
+`GET /cockpit/intake` — see `docs/intake-agent-v2-integration-plan.md`). Default
 bind is `127.0.0.1:8000`; pass `--host 0.0.0.0` to expose on LAN. All state
 is in-memory and clears on restart. Optionally `pip install pyyaml` to parse
 `agents/registry.yaml` at startup; without it a hardcoded fallback is used.
@@ -155,9 +164,21 @@ systemd unit, Docker image, or process manager is defined here. Any expansion
 of its scope or a separate deployment configuration requires operator
 sign-off per GOV-4 before being merged.
 
-There are no tests and no linter configuration in this repo. If you add
-tests, there's no existing convention to follow — pick something standard
-(`pytest`, files under a `tests/` directory) and mention the choice.
+**Security:** `POST /api/register` and `POST /intake-agent-v2/lifecycle/transition`
+are unauthenticated — anyone who can reach the server can unlock full
+marketplace access. Keep the default localhost bind until operator/session
+auth exists.
+
+Tests use `pytest` (`pip install pytest`), with files under `tests/`:
+
+```bash
+python3 -m pytest -q
+```
+
+`tests/conftest.py` puts the repo root on `sys.path`, starts
+`scripts/serve.py`'s handler on an ephemeral port in a background thread,
+and clears its in-memory state before each test. There is no linter
+configuration.
 
 ## Conventions actually used in the code
 
@@ -200,10 +221,12 @@ specs live in dedicated files so this document stays scannable:
   Every record type carries a `type` discriminator field.
 - **`agents/registry.yaml`** (schema v3) — the registry populated with what
   actually exists today: one engine (`ghost-layer-core`, with real
-  `capabilities`), its four agents (each with real `capabilities`), and
+  `capabilities`), its four active agents plus the `experimental`
+  `intake-agent-v2` (each with real `capabilities`), and
   one HITL operator entry (`operators:`). No runtime-event data lives here —
   all v3 record types (`AgentDeploymentRecord`, `AuditEvent`, etc.) are
-  managed by MSHOPS.NET. Hand-maintained; nothing in this repo parses it.
+  managed by MSHOPS.NET. Hand-maintained; the engine never reads it — only
+  `scripts/serve.py` does, read-only (with a hardcoded fallback mirror).
 - **`AGENT_HQ.md`** — the full protocol: how agents register, how engines
   declare capabilities, the routing model (lanes, modes, statuses), the
   HITL Governance Layer (see below), the Escalation Lifecycle, Agent
@@ -221,9 +244,11 @@ specs live in dedicated files so this document stays scannable:
 `create_default_engine()` in `core/engine.py` is unchanged. `scripts/serve.py`
 (see "Running things") is the sole integration layer: a dev-grade HTTP server
 that wraps the engine and exposes a subset of `API_CONTRACT.md` v2 endpoints
-for local development and integration testing. It does not add persistence,
-enforcement, or routing logic — it is a thin HTTP skin, operator-approved per
-GOV-4. The registry/protocol/API docs remain parallel design artifacts
+for local development and integration testing. It adds no persistence. Its
+only logic beyond an HTTP skin is the Intake Agent v2 bootstrap: an
+in-memory routing table recorded as audit metadata (never dispatched — the
+agent does not run), and the `received → validated → queued → processed`
+transition check. Operator-approved per GOV-4. The registry/protocol/API docs remain parallel design artifacts
 describing a system that does not exist yet — do not wire additional spec
 behavior into the engine unless explicitly asked; that would conflate
 "documented plan" with "shipped behavior," which is exactly the gap this file

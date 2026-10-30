@@ -617,8 +617,11 @@ built.
 
 ## Non-goals
 
-- No HTTP server, daemon, or deployment config lives in this repo, and
-  none should be added here.
+- No production server, daemon, or deployment config lives in this repo,
+  and none should be added here. The one bounded exception is
+  `scripts/serve.py`, a dev-grade, stdlib-only, in-memory HTTP server for
+  local integration testing (operator-approved; see `CLAUDE.md`'s
+  "Running things"). It is not the MSHOPS.NET backend.
 - No dynamic/plugin-loading mechanism exists or is planned for this
   repo — the registry is a hand-maintained spec, not a loader.
 - No enforcement, dispatch, throttling, or arbitration code implements
