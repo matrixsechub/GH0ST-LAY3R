@@ -16,6 +16,8 @@ Endpoints:
     GET  /hq/health                        — computed HQHealthRecord (includes all intake counts)
     GET  /audit                            — AuditEvent[] (filter: event_type, actor_id, since)
     GET  /escalations                      — EscalationEvent[] (filter: status, severity)
+    GET  /escalations/:id                  — one EscalationEvent
+    PATCH /escalations/:id                 — acknowledge (anyone) / resolve, dismiss (operator token)
     GET  /agents                           — agents from registry.yaml
     GET  /engines                          — engines from registry.yaml
     GET  /operators                        — operators from registry.yaml
@@ -304,6 +306,17 @@ _OPERATOR_ACTIONS: dict = {
 }
 _ESCALATION_SEVERITIES = ("low", "medium", "high", "critical")
 
+# PATCH /escalations/:id — AGENT_HQ.md's Escalation Lifecycle state machine:
+# pending -> acknowledged -> resolved, pending -> dismissed,
+# acknowledged -> dismissed. Anyone may acknowledge; only the operator may
+# resolve or dismiss.
+_ESCALATION_TRANSITIONS: dict = {
+    "pending":      {"acknowledged", "dismissed"},
+    "acknowledged": {"resolved", "dismissed"},
+}
+_ESCALATION_STATUSES = ("acknowledged", "resolved", "dismissed")
+_OPERATOR_ONLY_ESCALATION_STATUSES = frozenset({"resolved", "dismissed"})
+
 # Shared secret for operator actions. Unset = operator actions disabled (fail closed).
 OPERATOR_TOKEN_ENV = "GHOST_OPERATOR_TOKEN"
 
@@ -373,6 +386,20 @@ def _operator_auth_error(authorization: str) -> tuple[int, str] | None:
     if scheme.lower() != "bearer" or not hmac.compare_digest(token.encode(), expected.encode()):
         return 401, "Operator authentication required: send 'Authorization: Bearer <token>'"
     return None
+
+
+def _escalation_id_from_path(path: str) -> str | None:
+    """The id in /escalations/<id>, or None if path is not that shape."""
+    prefix = "/escalations/"
+    if not path.startswith(prefix):
+        return None
+    escalation_id = path[len(prefix):]
+    return escalation_id if escalation_id and "/" not in escalation_id else None
+
+
+def _find_escalation(escalation_id: str) -> dict | None:
+    """Caller must hold _lock."""
+    return next((e for e in _escalations if e.get("id") == escalation_id), None)
 
 
 def _non_string_field(body: dict, *names: str) -> str | None:
@@ -642,7 +669,7 @@ class GhostHQHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
         self.send_header(
             "Access-Control-Allow-Headers",
             "Content-Type, Authorization, X-Ghost-Operator-Online",
@@ -660,6 +687,12 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                 self._get_audit(params)
             elif path == "/escalations":
                 self._get_escalations(params)
+            elif (escalation_id := _escalation_id_from_path(path)) is not None:
+                escalation = _find_escalation(escalation_id)
+                if escalation is None:
+                    _send_error(self, 404, f"No escalation: {escalation_id}")
+                else:
+                    _send_json(self, 200, escalation)
             elif path == "/agents":
                 _send_json(self, 200, _registry.get("agents", []))
             elif path == "/engines":
@@ -692,22 +725,8 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             if auth_error:
                 _send_error(self, *auth_error)
                 return
-        try:
-            length = int(self.headers.get("Content-Length", 0))
-        except ValueError:
-            _send_error(self, 400, "Invalid Content-Length")
-            return
-        if length > MAX_BODY_BYTES:
-            _send_error(self, 413, f"Request body exceeds {MAX_BODY_BYTES} bytes")
-            return
-        raw_body = self.rfile.read(length) if length > 0 else b"{}"
-        try:
-            body: dict = json.loads(raw_body or b"{}")
-        except json.JSONDecodeError:
-            _send_error(self, 400, "Invalid JSON body")
-            return
-        if not isinstance(body, dict):
-            _send_error(self, 400, "Request body must be a JSON object")
+        body = self._read_json_body()
+        if body is None:
             return
 
         if path == "/intents":
@@ -720,6 +739,44 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             self._post_operator_action(body)
         else:
             _send_error(self, 404, f"No route: {path}")
+
+    # -- PATCH -----------------------------------------------------------------
+
+    def do_PATCH(self) -> None:
+        path, _ = _parse_path(self.path)
+        escalation_id = _escalation_id_from_path(path)
+        if escalation_id is None:
+            _send_error(self, 404, f"No route: {path}")
+            return
+        body = self._read_json_body()
+        if body is None:
+            return
+        self._patch_escalation(escalation_id, body)
+
+    def _read_json_body(self) -> dict | None:
+        """
+        Read and parse the request body as a JSON object. On a bad body,
+        sends the error response and returns None. Bodies over
+        MAX_BODY_BYTES are refused without being read.
+        """
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            _send_error(self, 400, "Invalid Content-Length")
+            return None
+        if length > MAX_BODY_BYTES:
+            _send_error(self, 413, f"Request body exceeds {MAX_BODY_BYTES} bytes")
+            return None
+        raw_body = self.rfile.read(length) if length > 0 else b"{}"
+        try:
+            body = json.loads(raw_body or b"{}")
+        except json.JSONDecodeError:
+            _send_error(self, 400, "Invalid JSON body")
+            return None
+        if not isinstance(body, dict):
+            _send_error(self, 400, "Request body must be a JSON object")
+            return None
+        return body
 
     # -- Endpoint implementations ----------------------------------------------
 
@@ -812,6 +869,69 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         if severity := params.get("severity"):
             escs = [e for e in escs if e.get("severity") == severity]
         _send_json(self, 200, escs)
+
+    def _patch_escalation(self, escalation_id: str, body: dict) -> None:
+        """
+        PATCH /escalations/:id
+        Body: {"status": "acknowledged|resolved|dismissed", "resolution"?: "..."}
+        Follows _ESCALATION_TRANSITIONS. resolved / dismissed need the
+        operator token; acknowledged does not, but a token that is sent must
+        be valid. resolution is recorded on resolved / dismissed. Closing an
+        intake's escalation here leaves the intake in "escalated" (no
+        marketplace access) until the operator approves or closes it.
+        """
+        bad_field = _non_string_field(body, "status", "resolution")
+        if bad_field:
+            _send_error(self, 400, f"'{bad_field}' must be a string")
+            return
+        status = body.get("status", "")
+        resolution = body.get("resolution", "")
+        if not status:
+            _send_error(self, 400, "'status' is required")
+            return
+        if status not in _ESCALATION_STATUSES:
+            _send_error(self, 422, f"Unknown status '{status}'. Valid: {list(_ESCALATION_STATUSES)}")
+            return
+
+        authorization = self.headers.get("Authorization", "")
+        by_operator = status in _OPERATOR_ONLY_ESCALATION_STATUSES or bool(authorization)
+        if by_operator:
+            auth_error = _operator_auth_error(authorization)
+            if auth_error:
+                _send_error(self, *auth_error)
+                return
+
+        with _lock:
+            escalation = _find_escalation(escalation_id)
+            if escalation is None:
+                _send_error(self, 404, f"No escalation: {escalation_id}")
+                return
+            from_status = escalation.get("status", "")
+            allowed = _ESCALATION_TRANSITIONS.get(from_status, set())
+            if status not in allowed:
+                _send_error(
+                    self, 422,
+                    f"Transition '{from_status}' → '{status}' not allowed. "
+                    f"Valid next statuses: {sorted(allowed) or 'none (closed)'}",
+                )
+                return
+
+            actor_id = _registered_operator_id() if by_operator else "public"
+            escalation["status"] = status
+            if status in _OPERATOR_ONLY_ESCALATION_STATUSES:
+                escalation["resolved_at"] = _now()
+                escalation["resolution"] = resolution
+            _write_audit(
+                "escalation.status_changed",
+                actor_id=actor_id,
+                actor_type="operator" if by_operator else "system",
+                target_id=escalation_id,
+                target_type="escalation",
+                payload={"from_status": from_status, "status": status},
+            )
+            updated = dict(escalation)
+
+        _send_json(self, 200, updated)
 
     def _get_intake_agent_entry(self) -> None:
         agents = _registry.get("agents", [])

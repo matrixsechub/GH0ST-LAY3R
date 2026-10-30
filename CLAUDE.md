@@ -149,6 +149,7 @@ PYTHONPATH=. python3 scripts/serve.py [--port 8000]   # HQ HTTP server (see belo
 `scripts/serve.py` starts a single-process, dev-grade HTTP server that wraps
 `GhostLayerEngine` and exposes a subset of `API_CONTRACT.md` v2 endpoints:
 `POST /intents`, `GET /hq/health`, `GET /audit`, `GET /escalations`,
+`GET /escalations/:id`, `PATCH /escalations/:id`,
 `GET /agents`, `GET /engines`, `GET /operators`, `GET /agent-pools`, plus the
 Intake Agent v2 bootstrap routes (`POST /api/register`, `GET /marketplace`,
 `POST /intake-agent-v2/lifecycle/transition`, `POST /intake-agent-v2/lifecycle/action`,
@@ -180,7 +181,11 @@ would cross the network in plain HTTP.
 
 The same token is required for `POST /intake-agent-v2/lifecycle/transition`
 when `to_stage` is `validated`, since that grants marketplace access; the
-`queued` and `processed` steps stay public.
+`queued` and `processed` steps stay public. `PATCH /escalations/:id` follows
+`AGENT_HQ.md`'s Escalation Lifecycle: anyone may move `pending →
+acknowledged`; `resolved` and `dismissed` need the token. Closing an
+intake's escalation this way leaves the intake `escalated` (no marketplace
+access) until the operator approves or closes it.
 
 **Security:** `POST /api/register`, the public transition steps, and all GET
 endpoints are unauthenticated, so anyone who can reach the server can
@@ -344,9 +349,10 @@ operator. Full detail (rule tables, schema, YAML) lives in `AGENT_HQ.md`'s
 **Same non-goals as the rest of Agent HQ:** the engine enforces none of
 these rules. The only enforcement anywhere in this repo is the dev-grade
 `scripts/serve.py`: GOV-3 auto-escalation on `POST /intents`, GOV-7 via
-`X-Ghost-Operator-Online`, and token-gated intake operator actions that
-open, resolve, and dismiss `EscalationEvent`s, which only the operator's
-token can do. Those escalations live in an in-memory list, not a queue or
+`X-Ghost-Operator-Online`, token-gated intake operator actions that open,
+resolve, and dismiss `EscalationEvent`s, and `PATCH /escalations/:id`, which
+implements the Escalation Lifecycle state machine (resolve and dismiss need
+the operator's token). Those escalations live in an in-memory list, not a queue or
 database. No lore has been introduced; if narrative framing of "Operator
 Office" or anything else is ever wanted, it belongs in a separate,
 explicitly-labeled document (e.g. `GHOSTLAYERLORE.md`), never in this file.

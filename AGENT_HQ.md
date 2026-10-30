@@ -256,9 +256,11 @@ events, not hand-maintained registry entries (see below).
 > `EscalationEvent`. The only code that does is the dev-grade
 > `scripts/serve.py`, in memory: GOV-3 auto-escalation on `POST /intents`,
 > and token-gated intake operator actions that open escalations
-> (`trigger_rule: "operator-manual"`) and resolve or dismiss them — see
-> `docs/intake-agent-v2-integration-plan.md`. It does not implement
-> `acknowledged` or persistence. This section defines the shape and state
+> (`trigger_rule: "operator-manual"`) and resolve or dismiss them (see
+> `docs/intake-agent-v2-integration-plan.md`). `PATCH /escalations/:id`
+> implements the state machine below, including `acknowledged`, with the
+> operator token standing in for "the registered operator". It has no
+> persistence. This section defines the shape and state
 > machine a future dispatch/governance layer (MSHOPS.NET) must implement to
 > satisfy GOV-1, GOV-2, GOV-3, and GOV-5 above.
 
