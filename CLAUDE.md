@@ -151,7 +151,8 @@ PYTHONPATH=. python3 scripts/serve.py [--port 8000]   # HQ HTTP server (see belo
 `POST /intents`, `GET /hq/health`, `GET /audit`, `GET /escalations`,
 `GET /agents`, `GET /engines`, `GET /operators`, `GET /agent-pools`, plus the
 Intake Agent v2 bootstrap routes (`POST /api/register`, `GET /marketplace`,
-`POST /intake-agent-v2/lifecycle/transition`, `GET /intake-agent-v2/lifecycle`,
+`POST /intake-agent-v2/lifecycle/transition`, `POST /intake-agent-v2/lifecycle/action`,
+`GET /intake-agent-v2/lifecycle`,
 `GET /intake-agent-v2/metrics`, `GET /agents/intake-agent-v2`,
 `GET /cockpit/intake` — see `docs/intake-agent-v2-integration-plan.md`). Default
 bind is `127.0.0.1:8000`; pass `--host 0.0.0.0` to expose on LAN. All state
@@ -164,10 +165,26 @@ systemd unit, Docker image, or process manager is defined here. Any expansion
 of its scope or a separate deployment configuration requires operator
 sign-off per GOV-4 before being merged.
 
+**Operator actions** (`POST /intake-agent-v2/lifecycle/action`: approve,
+escalate, close, reassign, annotate) require `Authorization: Bearer <token>`
+matching the `GHOST_OPERATOR_TOKEN` environment variable set when the server
+starts; if it is unset, the endpoint refuses every request (403):
+
+```bash
+GHOST_OPERATOR_TOKEN=<secret> PYTHONPATH=. python3 scripts/serve.py
+```
+
+On a non-loopback bind (e.g. `--host 0.0.0.0`) operator actions are
+refused unless you also pass `--allow-insecure-operator`, because the token
+would cross the network in plain HTTP.
+
 **Security:** `POST /api/register` and `POST /intake-agent-v2/lifecycle/transition`
-are unauthenticated — anyone who can reach the server can unlock full
-marketplace access. Keep the default localhost bind until operator/session
-auth exists.
+are still unauthenticated — anyone who can reach the server can move a
+`received` intake to `validated` (the same result as the operator's
+`approve`) and unlock full marketplace access while no intake escalation is
+open. All GET endpoints are unauthenticated too, so operator notes are
+readable. Keep the default localhost bind until all endpoints are
+authenticated.
 
 Tests use `pytest` (`pip install pytest`), with files under `tests/`:
 
@@ -247,8 +264,9 @@ that wraps the engine and exposes a subset of `API_CONTRACT.md` v2 endpoints
 for local development and integration testing. It adds no persistence. Its
 only logic beyond an HTTP skin is the Intake Agent v2 bootstrap: an
 in-memory routing table recorded as audit metadata (never dispatched — the
-agent does not run), and the `received → validated → queued → processed`
-transition check. Operator-approved per GOV-4. The registry/protocol/API docs remain parallel design artifacts
+agent does not run), the `received → validated → queued → processed`
+transition check, and token-gated operator actions that can open and close
+`EscalationEvent`s for intakes. Operator-approved per GOV-4. The registry/protocol/API docs remain parallel design artifacts
 describing a system that does not exist yet — do not wire additional spec
 behavior into the engine unless explicitly asked; that would conflate
 "documented plan" with "shipped behavior," which is exactly the gap this file
@@ -320,9 +338,12 @@ operator. Full detail (rule tables, schema, YAML) lives in `AGENT_HQ.md`'s
   through any mechanism other than `OperatorSessionRecord.ended_at`,
   violates the spec.
 
-**Same non-goals as the rest of Agent HQ:** no enforcement, dispatch, or
-arbitration code exists in this repo implementing these rules or the
-escalation state machine — `EscalationEvent` is a schema, not a queue or
+**Same non-goals as the rest of Agent HQ:** the engine enforces none of
+these rules. The only enforcement anywhere in this repo is the dev-grade
+`scripts/serve.py`: GOV-3 auto-escalation on `POST /intents`, GOV-7 via
+`X-Ghost-Operator-Online`, and token-gated intake operator actions that
+open, resolve, and dismiss `EscalationEvent`s, which only the operator's
+token can do. Those escalations live in an in-memory list, not a queue or
 database. No lore has been introduced; if narrative framing of "Operator
 Office" or anything else is ever wanted, it belongs in a separate,
 explicitly-labeled document (e.g. `GHOSTLAYERLORE.md`), never in this file.
