@@ -138,8 +138,10 @@ Response: the full `EscalationEvent`, `status: "pending"`.
 Transition an escalation's status. Per `AGENT_HQ.md`'s Escalation
 Lifecycle state machine, any caller may move `pending -> acknowledged`,
 but only the registered operator may move to `resolved` or `dismissed` —
-enforcing that distinction is MSHOPS.NET's responsibility; this repo only
-specifies the rule.
+enforcing that distinction is MSHOPS.NET's responsibility. (The dev-grade
+`scripts/serve.py` implements this endpoint and `GET /escalations/:id` for
+local testing, using the `GHOST_OPERATOR_TOKEN` bearer token as operator
+identity; see `CLAUDE.md`.)
 
 Request:
 
