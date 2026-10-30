@@ -12,12 +12,16 @@ Usage:
     PYTHONPATH=. python3 scripts/serve.py [--host 127.0.0.1] [--port 8000]
 
 Endpoints:
-    POST /intents                          — run engine, GOV-7 header support, routing table checked
+    POST /intents                          — run engine; GOV-7 posture while an operator session is open
     GET  /hq/health                        — computed HQHealthRecord (includes all intake counts)
     GET  /audit                            — AuditEvent[] (filter: event_type, actor_id, since)
     GET  /escalations                      — EscalationEvent[] (filter: status, severity)
     GET  /escalations/:id                  — one EscalationEvent
     PATCH /escalations/:id                 — acknowledge (anyone) / resolve, dismiss (operator token)
+    GET  /operator/sessions                — OperatorSessionRecord[] (filter: operator_id, active)
+    GET  /operator/sessions/:id            — one OperatorSessionRecord
+    POST /operator/sessions                — open a session (operator token; one open at a time)
+    PATCH /operator/sessions/:id           — close a session (operator token)
     GET  /agents                           — agents from registry.yaml
     GET  /engines                          — engines from registry.yaml
     GET  /operators                        — operators from registry.yaml
@@ -388,13 +392,18 @@ def _operator_auth_error(authorization: str) -> tuple[int, str] | None:
     return None
 
 
-def _escalation_id_from_path(path: str) -> str | None:
-    """The id in /escalations/<id>, or None if path is not that shape."""
-    prefix = "/escalations/"
+def _id_from_path(path: str, collection: str) -> str | None:
+    """The id in <collection>/<id>, or None if path is not that shape."""
+    prefix = collection + "/"
     if not path.startswith(prefix):
         return None
-    escalation_id = path[len(prefix):]
-    return escalation_id if escalation_id and "/" not in escalation_id else None
+    record_id = path[len(prefix):]
+    return record_id if record_id and "/" not in record_id else None
+
+
+def _find_session(session_id: str) -> dict | None:
+    """Caller must hold _lock."""
+    return next((s for s in _sessions if s.get("session_id") == session_id), None)
 
 
 def _find_escalation(escalation_id: str) -> dict | None:
@@ -524,7 +533,7 @@ def _write_audit(
     return event
 
 
-def _open_session(operator_id: str) -> dict:
+def _open_session(operator_id: str, notes: str = "") -> dict:
     """Create a new OperatorSessionRecord. Caller must hold _lock."""
     session: dict = {
         "session_id": str(uuid.uuid4()),
@@ -533,7 +542,7 @@ def _open_session(operator_id: str) -> dict:
         "started_at": _now(),
         "ended_at": None,
         "active_intent_ids": [],
-        "notes": "",
+        "notes": notes,
     }
     _sessions.append(session)
     _write_audit(
@@ -672,7 +681,7 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
         self.send_header(
             "Access-Control-Allow-Headers",
-            "Content-Type, Authorization, X-Ghost-Operator-Online",
+            "Content-Type, Authorization",
         )
         self.end_headers()
 
@@ -687,12 +696,20 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                 self._get_audit(params)
             elif path == "/escalations":
                 self._get_escalations(params)
-            elif (escalation_id := _escalation_id_from_path(path)) is not None:
+            elif (escalation_id := _id_from_path(path, "/escalations")) is not None:
                 escalation = _find_escalation(escalation_id)
                 if escalation is None:
                     _send_error(self, 404, f"No escalation: {escalation_id}")
                 else:
                     _send_json(self, 200, escalation)
+            elif path == "/operator/sessions":
+                self._get_sessions(params)
+            elif (session_id := _id_from_path(path, "/operator/sessions")) is not None:
+                session = _find_session(session_id)
+                if session is None:
+                    _send_error(self, 404, f"No operator session: {session_id}")
+                else:
+                    _send_json(self, 200, session)
             elif path == "/agents":
                 _send_json(self, 200, _registry.get("agents", []))
             elif path == "/engines":
@@ -720,7 +737,7 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         path, _ = _parse_path(self.path)
         # Operator auth runs before the body is read, so an unauthenticated
         # caller cannot make the server buffer or parse anything.
-        if path == "/intake-agent-v2/lifecycle/action":
+        if path in ("/intake-agent-v2/lifecycle/action", "/operator/sessions"):
             auth_error = _operator_auth_error(self.headers.get("Authorization", ""))
             if auth_error:
                 _send_error(self, *auth_error)
@@ -737,6 +754,8 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             self._post_lifecycle_transition(body)
         elif path == "/intake-agent-v2/lifecycle/action":
             self._post_operator_action(body)
+        elif path == "/operator/sessions":
+            self._post_session(body)
         else:
             _send_error(self, 404, f"No route: {path}")
 
@@ -744,14 +763,24 @@ class GhostHQHandler(BaseHTTPRequestHandler):
 
     def do_PATCH(self) -> None:
         path, _ = _parse_path(self.path)
-        escalation_id = _escalation_id_from_path(path)
-        if escalation_id is None:
+        escalation_id = _id_from_path(path, "/escalations")
+        session_id = _id_from_path(path, "/operator/sessions")
+        if escalation_id is None and session_id is None:
             _send_error(self, 404, f"No route: {path}")
             return
+        if session_id is not None:
+            # Only the operator closes sessions; refuse before reading the body.
+            auth_error = _operator_auth_error(self.headers.get("Authorization", ""))
+            if auth_error:
+                _send_error(self, *auth_error)
+                return
         body = self._read_json_body()
         if body is None:
             return
-        self._patch_escalation(escalation_id, body)
+        if session_id is not None:
+            self._patch_session(session_id, body)
+        else:
+            self._patch_escalation(escalation_id, body)
 
     def _read_json_body(self) -> dict | None:
         """
@@ -789,9 +818,15 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             _send_error(self, 400, "'raw' must be a non-empty string")
             return
 
-        gov7_active = (
-            self.headers.get("X-Ghost-Operator-Online", "").lower() == "true"
-        )
+        # An intent is the operator's only with a valid token. Operator
+        # presence (GOV-7) comes solely from an open OperatorSessionRecord.
+        authorization = self.headers.get("Authorization", "")
+        by_operator = bool(authorization)
+        if by_operator:
+            auth_error = _operator_auth_error(authorization)
+            if auth_error:
+                _send_error(self, *auth_error)
+                return
 
         # Run engine outside the lock — engine.run() is stateless per call.
         try:
@@ -805,25 +840,19 @@ class GhostHQHandler(BaseHTTPRequestHandler):
 
         with _lock:
             op_id = _registered_operator_id()
+            session_id = _active_session_id()
+            gov7_active = session_id is not None
 
             if gov7_active:
-                # GOV-7: operator-presence posture — open session if none active.
-                if not _operator_online():
-                    sess = _open_session(op_id)
-                else:
-                    sid = _active_session_id()
-                    if sid:
-                        for s in _sessions:
-                            if s["session_id"] == sid:
-                                s["active_intent_ids"].append(intent_id)
-                                break
+                # GOV-7: operator present — link the intent to the open session.
+                _find_session(session_id)["active_intent_ids"].append(intent_id)
                 _write_audit(
                     "gov_rule.fired",
-                    actor_id=op_id,
-                    actor_type="operator",
+                    actor_id="ghost-layer-core",
+                    actor_type="system",
                     target_id=intent_id,
                     target_type="intent",
-                    payload={"rule": "GOV-7", "source": source},
+                    payload={"rule": "GOV-7", "session_id": session_id, "source": source},
                 )
 
             # Routing table check — advisory, not constellation activation.
@@ -835,8 +864,8 @@ class GhostHQHandler(BaseHTTPRequestHandler):
 
             _write_audit(
                 "intent.submitted",
-                actor_id=op_id if gov7_active else source,
-                actor_type="operator" if gov7_active else "system",
+                actor_id=op_id if by_operator else source,
+                actor_type="operator" if by_operator else "system",
                 target_id=intent_id,
                 target_type="intent",
                 payload={
@@ -869,6 +898,76 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         if severity := params.get("severity"):
             escs = [e for e in escs if e.get("severity") == severity]
         _send_json(self, 200, escs)
+
+    def _get_sessions(self, params: dict) -> None:
+        """GET /operator/sessions — filter by operator_id and active=true|false."""
+        sessions = list(_sessions)
+        if operator_id := params.get("operator_id"):
+            sessions = [s for s in sessions if s.get("operator_id") == operator_id]
+        active = params.get("active")
+        if active in ("true", "false"):
+            want_open = active == "true"
+            sessions = [s for s in sessions if (s.get("ended_at") is None) == want_open]
+        elif active is not None:
+            _send_error(self, 400, "'active' must be 'true' or 'false'")
+            return
+        _send_json(self, 200, sessions)
+
+    def _post_session(self, body: dict) -> None:
+        """
+        POST /operator/sessions — open the operator's session (GOV-7 presence).
+        Body: {"operator_id"?: "<registered operator>", "notes"?: "..."}.
+        Operator auth is enforced in do_POST before the body is read. Only one
+        session may be open at a time (409 otherwise).
+        """
+        bad_field = _non_string_field(body, "operator_id", "notes")
+        if bad_field:
+            _send_error(self, 400, f"'{bad_field}' must be a string")
+            return
+        with _lock:
+            op_id = _registered_operator_id()
+            if body.get("operator_id", op_id) != op_id:
+                _send_error(self, 422, f"'operator_id' must be the registered operator ({op_id})")
+                return
+            open_id = _active_session_id()
+            if open_id is not None:
+                _send_error(self, 409, f"An operator session is already open: {open_id}")
+                return
+            session = dict(_open_session(op_id, body.get("notes", "")))
+        _send_json(self, 201, session)
+
+    def _patch_session(self, session_id: str, body: dict) -> None:
+        """
+        PATCH /operator/sessions/:id — close a session (ended_at = now).
+        Body: {"notes"?: "..."}, appended to the session's notes. Operator auth
+        is enforced in do_PATCH before the body is read.
+        """
+        bad_field = _non_string_field(body, "notes")
+        if bad_field:
+            _send_error(self, 400, f"'{bad_field}' must be a string")
+            return
+        notes = body.get("notes", "")
+        with _lock:
+            session = _find_session(session_id)
+            if session is None:
+                _send_error(self, 404, f"No operator session: {session_id}")
+                return
+            if session.get("ended_at") is not None:
+                _send_error(self, 409, f"Operator session already closed: {session_id}")
+                return
+            session["ended_at"] = _now()
+            if notes:
+                session["notes"] = f"{session['notes']}\n{notes}" if session.get("notes") else notes
+            _write_audit(
+                "operator.session_closed",
+                actor_id=session["operator_id"],
+                actor_type="operator",
+                target_id=session_id,
+                target_type="operator-session",
+                payload={"active_intent_count": len(session.get("active_intent_ids", []))},
+            )
+            closed = dict(session)
+        _send_json(self, 200, closed)
 
     def _patch_escalation(self, escalation_id: str, body: dict) -> None:
         """
