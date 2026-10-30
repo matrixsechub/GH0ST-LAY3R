@@ -219,7 +219,11 @@ dispatch layer with mode gating, an escalation-aware router) that do not
 exist in this repo — they are requirements on whatever MSHOPS.NET builds,
 not a description of `AgentConstellation.run_all()`, which today runs
 every agent whose `supports()` returns `True` with no operator- or
-escalation-awareness at all.
+escalation-awareness at all. (The dev-grade `scripts/serve.py` records
+ROUTE-6, and the ROUTE-1 lane it overrides, without dispatching anything:
+each hold and release is an `AuditEvent(event_type="intent.routed")` on
+the intent, and `intent.submitted` carries the lane the intent was given.
+See `CLAUDE.md`.)
 
 ### Registry integration
 
