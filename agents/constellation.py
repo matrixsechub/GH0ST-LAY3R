@@ -10,6 +10,9 @@ Agents are modular intelligence operators that:
 - Observe substrate state
 - Decide if they should activate
 - Produce structured outputs for the Oversoul to fuse
+
+A "module" in the Ghost Layer sense is simply an object implementing the
+Agent protocol below; there is no separate module abstraction.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Protocol
 
 from core.substrate import SubstrateState
-from core.engine import IntentVector
+from core.types import IntentVector
 
 
 # ---------------------------------------------------------------------------
@@ -128,4 +131,81 @@ class OperatorDoctrineAgent:
             "doctrine": "bounded-escalation",
             "intent_tags": intent.tags,
             "spectral_density": state.spectral_density,
+        }
+
+
+@dataclass
+class RouteAdvisoryAgent:
+    """
+    Suggests which future Ghost Layer subsystem an intent would plausibly
+    route to, based on lightweight tag/volatility heuristics. Advisory only —
+    does not perform any actual routing or call any external system.
+    """
+    name: str = "RouteAdvisoryAgent"
+
+    def supports(self, intent: IntentVector, state: SubstrateState) -> bool:
+        return True  # always active, like OperatorDoctrineAgent
+
+    def run(self, intent: IntentVector, state: SubstrateState) -> Dict[str, Any]:
+        tags = set(intent.tags)
+        if tags.intersection({"high-risk", "escalate", "critical"}):
+            suggested_lane = "containment-review"
+        elif state.volatility > 0.5:
+            suggested_lane = "adversarial-intel"
+        else:
+            suggested_lane = "general-intake"
+
+        return {
+            "suggested_lane": suggested_lane,
+            "confidence": "heuristic",
+            "basis": {
+                "intent_tags": intent.tags,
+                "volatility": state.volatility,
+            },
+        }
+
+
+@dataclass
+class IntakeAgentV2:
+    """
+    Classifies intents into lifecycle stages and exposes queue metrics for
+    HQ observability. Operator-action hooks (approve, escalate, close,
+    reassign, annotate) are surfaced through ttx-operator-shell's HQ console.
+
+    GOV-4 gate: this class is defined here but NOT registered in
+    create_default_engine() — that registration requires operator approval.
+    Routing is active (serve.py _routing_table) without constellation activation.
+    Status: experimental (see agents/registry.yaml id: intake-agent-v2).
+    See docs/intake-agent-v2-integration-plan.md for the full plan.
+
+    TTX flow:  received -> validated -> queued -> processed
+    Routing tags handled by serve.py _routing_table (see ROUTING_TAGS below).
+    """
+    name: str = "IntakeAgentV2"
+    # Tags that route to this agent via the serve.py routing table (GOV-4 routing-only mode).
+    # The routing table in serve.py references these at startup.
+    ROUTING_TAGS: tuple = ("intake", "register", "access-request", "paywall", "register-transition")
+    _ESCALATION_TAGS: tuple = ("high-risk", "escalate", "critical")
+
+    def supports(self, intent: IntentVector, state: SubstrateState) -> bool:
+        return True  # always-on once registered (GOV-4 gate is at registration)
+
+    def run(self, intent: IntentVector, state: SubstrateState) -> Dict[str, Any]:
+        tags = set(intent.tags)
+        needs_escalation = bool(tags.intersection(self._ESCALATION_TAGS)) or state.volatility >= 0.8
+        if needs_escalation:
+            stage = "escalated"
+            operator_action_required = True
+            available_actions = ["escalate", "close", "reassign", "annotate"]
+        else:
+            stage = "received"   # TTX initial stage; serve.py advances through transitions
+            operator_action_required = False
+            available_actions = ["approve", "close", "annotate"]
+
+        return {
+            "intake_status": "received",
+            "lifecycle_stage": stage,
+            "queue_depth": 0,   # placeholder; real count managed by serve.py _intake_lifecycle
+            "operator_action_required": operator_action_required,
+            "operator_actions_available": available_actions,
         }

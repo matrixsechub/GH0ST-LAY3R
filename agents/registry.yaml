@@ -1,0 +1,138 @@
+# Agent HQ registry (schema v3)
+#
+# Describes the agents, engines, and the HITL operator that actually exist
+# in this repo today. Schema: core/registry.py (EngineBinding,
+# AgentRegistryEntry, OperatorEntry, EscalationEvent, and v3 additions).
+# Protocol, routing model, HITL Governance Layer, Escalation Lifecycle,
+# Agent Lifecycle & Deployment, Multi-Engine Coordination, Operator
+# Surfaces, HQ Health & Observability, and Agent Pools: AGENT_HQ.md.
+# Hand-maintained. The engine never reads this file; the only reader is
+# the dev-grade scripts/serve.py, which serves it read-only via
+# GET /agents, /engines, /operators (with a hardcoded mirror,
+# _REGISTRY_FALLBACK, when PyYAML is absent — keep the two in sync). It is
+# the data source a future MSHOPS.NET registry service would import.
+#
+# v2 adds `type` discriminators and `capabilities` to engines/agents
+# (previously operator-only) and the EscalationEvent schema in
+# core/registry.py. No escalation *data* lives here — escalations are
+# runtime events, not hand-maintained registry entries.
+#
+# v3 adds runtime-event schemas: AgentDeploymentRecord, EngineHealthRecord,
+# RoutingTableEntry, CapabilityIndex, AuditEvent, OperatorSessionRecord,
+# AgentPool, HQHealthRecord. No new hand-maintained data lives here —
+# all v3 record types are runtime events managed by MSHOPS.NET.
+
+schema_version: 3
+
+engines:
+  - type: engine
+    id: ghost-layer-core
+    status: active
+    description: >
+      The Python engine in this repo (core/ + agents/): substrate ->
+      dominion -> constellation -> oversoul -> reactor. The only engine
+      that actually exists and runs today.
+    entrypoint: core.engine.create_default_engine
+    capabilities: [substrate-ingestion, dominion-physics, agent-constellation, oversoul-fusion, output-reactor]
+
+operators:
+  - type: operator
+    operator_id: lupe
+    role: HITL
+    authority: root
+    priority_lane: operator
+    escalation_required: true
+    capabilities: [override, arbitration, review, priority]
+    binding: HQ-level
+
+agents:
+  - type: agent
+    id: adversarial-intel-agent
+    name: AdversarialIntelAgent
+    module_path: agents.constellation.AdversarialIntelAgent
+    engine: ghost-layer-core
+    mode: conditional
+    status: active
+    tags: [security, volatility]
+    capabilities: [threat-detection]
+    description: >
+      Flags elevated/moderate threat level based on substrate volatility.
+    produces:
+      threat_level: str
+      spectral_density: float
+      volatility: float
+
+  - type: agent
+    id: containment-agent
+    name: ContainmentAgent
+    module_path: agents.constellation.ContainmentAgent
+    engine: ghost-layer-core
+    mode: conditional
+    status: active
+    tags: [security, containment]
+    capabilities: [containment-action, volatility-clamp]
+    description: >
+      Activates on high volatility or escalation tags; recommends a
+      volatility clamp.
+    produces:
+      containment_action: str
+      volatility_before: float
+      recommended_clamp: float
+
+  - type: agent
+    id: operator-doctrine-agent
+    name: OperatorDoctrineAgent
+    module_path: agents.constellation.OperatorDoctrineAgent
+    engine: ghost-layer-core
+    mode: always-on
+    status: active
+    tags: [doctrine]
+    capabilities: [doctrine-echo]
+    description: >
+      Always active; echoes operator doctrine and intent tags.
+    produces:
+      doctrine: str
+      intent_tags: list
+      spectral_density: float
+
+  - type: agent
+    id: route-advisory-agent
+    name: RouteAdvisoryAgent
+    module_path: agents.constellation.RouteAdvisoryAgent
+    engine: ghost-layer-core
+    mode: always-on
+    status: active
+    tags: [routing, advisory]
+    capabilities: [lane-suggestion]
+    description: >
+      Always active; suggests a generic routing lane based on tag/volatility
+      heuristics. Advisory only — performs no real routing.
+    produces:
+      suggested_lane: str
+      confidence: str
+      basis: dict
+
+  - type: agent
+    id: intake-agent-v2
+    name: IntakeAgentV2
+    module_path: agents.constellation.IntakeAgentV2
+    engine: ghost-layer-core
+    mode: always-on
+    status: experimental
+    tags: [intake, lifecycle, queue, operator-surface]
+    capabilities: [intent-intake, queue-management, lifecycle-tracking, operator-action-hooks]
+    description: >
+      Intake lifecycle agent (received -> validated -> queued ->
+      processed) with queue metrics for HQ observability. Routing-only:
+      scripts/serve.py routes intake, register, access-request, paywall,
+      and register-transition tags to it as audit metadata, but the agent
+      itself never runs. Operator-action hooks (approve, escalate, close,
+      reassign, annotate) are schema only. Status experimental: requires
+      GOV-4 operator approval to promote to active and register with
+      create_default_engine().
+    produces:
+      intake_status: str
+      lifecycle_stage: str
+      queue_depth: int
+      operator_action_required: bool
+      operator_actions_available: list
