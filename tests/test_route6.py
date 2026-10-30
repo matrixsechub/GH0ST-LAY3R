@@ -208,3 +208,28 @@ def test_reescalating_holds_again(hq):
     _intake_action(hq, intent_id, "approve")      # back to validated
     _intake_action(hq, intent_id, "escalate")
     assert [held for held, _, _ in _routes(hq, intent_id)] == [True, False, True]
+
+
+# ---------------------------------------------------------------------------
+# The reserved lane is never a release target
+# ---------------------------------------------------------------------------
+
+def test_reassign_to_reserved_lane_is_refused(hq):
+    intent_id, _ = _escalated_intake(hq)
+    before = hq.get("/intake-agent-v2/lifecycle")[1], hq.get("/audit")[1]
+    latest = [r for r in before[0] if r["intent_id"] == intent_id][-1]
+    code, body = hq.post(ACTION, {"lifecycle_id": latest["id"], "action": "reassign", "lane": REVIEW}, AUTH)
+    assert code == 422
+    assert "reserved" in body["error"]
+    assert (hq.get("/intake-agent-v2/lifecycle")[1], hq.get("/audit")[1]) == before
+
+
+def test_suggested_lane_comes_from_route_advisory_agent_only():
+    envelope = {"payload": {"agents": [
+        {"agent": "SomeOtherAgent", "result": {"suggested_lane": "wrong"}},
+        {"agent": "RouteAdvisoryAgent", "result": {"suggested_lane": "general-intake"}},
+    ]}}
+    assert serve._suggested_lane(envelope) == "general-intake"
+    assert serve._suggested_lane({"payload": {"agents": [
+        {"agent": "SomeOtherAgent", "result": {"suggested_lane": "wrong"}},
+    ]}}) == ""
