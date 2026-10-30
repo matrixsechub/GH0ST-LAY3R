@@ -304,6 +304,11 @@ OPERATOR_TOKEN_ENV = "GHOST_OPERATOR_TOKEN"
 # Largest POST body accepted; larger requests get 413 without being read.
 MAX_BODY_BYTES = 64 * 1024
 
+# Non-empty = operator actions refused with this message. main() sets it when
+# the server binds a non-loopback address without --allow-insecure-operator,
+# because the token would cross the network in plain HTTP.
+_operator_bind_block = ""
+
 
 # ---------------------------------------------------------------------------
 # Utility helpers
@@ -352,6 +357,8 @@ def _latest_intake_record(intent_id: str) -> dict | None:
 
 def _operator_auth_error(authorization: str) -> tuple[int, str] | None:
     """Return (status, message) if the caller is not the operator, else None."""
+    if _operator_bind_block:
+        return 403, _operator_bind_block
     expected = os.environ.get(OPERATOR_TOKEN_ENV, "")
     if not expected:
         return 403, f"Operator actions are disabled: {OPERATOR_TOKEN_ENV} is not set on the server"
@@ -386,8 +393,33 @@ def _stage_entries() -> list:
     return entries
 
 
+def _open_intake_escalation_count() -> int:
+    """
+    Open escalations attached to an intake. GOV-3 escalations from
+    POST /intents have no intake, so the operator could never close them from
+    the intake flow; they don't gate the marketplace. Caller must hold _lock.
+    """
+    intake_intents = {r.get("intent_id") for r in _intake_lifecycle}
+    return sum(
+        1 for e in _escalations
+        if e.get("status") in ("pending", "acknowledged") and e.get("intent_id") in intake_intents
+    )
+
+
+def _current_marketplace() -> dict:
+    """
+    The marketplace state everyone sees (there is no identity layer). Any
+    open intake escalation puts it in review mode, so approving one intake
+    cannot grant access while another is under review; otherwise it follows
+    the most recently appended lifecycle record. Caller must hold _lock.
+    """
+    if _open_intake_escalation_count():
+        return _marketplace_state("escalated")
+    return _marketplace_state(_intake_lifecycle[-1].get("stage") if _intake_lifecycle else None)
+
+
 def _marketplace_state(latest_stage: str | None) -> dict:
-    """Map the most recent intake lifecycle stage to a marketplace access mode."""
+    """Map an intake lifecycle stage to a marketplace access mode."""
     if latest_stage in ("validated",):
         return {
             "mode": "full",
@@ -771,13 +803,18 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         intake.stage_changed AuditEvent, and returns the record.
         No auth — this is the unauthenticated public → intake boundary.
         """
-        bad_field = _non_string_field(body, "source", "raw", "intent_id", "notes")
+        # Intent ids are always generated here: a caller-chosen id could be
+        # claimed in advance by anyone who knows or guesses it.
+        if "intent_id" in body:
+            _send_error(self, 400, "'intent_id' is assigned by the server; do not send it")
+            return
+        bad_field = _non_string_field(body, "source", "raw", "notes")
         if bad_field:
             _send_error(self, 400, f"'{bad_field}' must be a string")
             return
         source = body.get("source", "public")
         raw = body.get("raw", "")
-        intent_id = body.get("intent_id") or str(uuid.uuid4())
+        intent_id = str(uuid.uuid4())
         notes = body.get("notes", "")
 
         if not raw and not body:
@@ -800,11 +837,6 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         }
 
         with _lock:
-            # Re-registering an existing intent would put a fresh "received"
-            # record on top of its chain, undoing an escalation.
-            if _latest_intake_record(intent_id) is not None:
-                _send_error(self, 409, f"Intent already registered: {intent_id}")
-                return
             _intake_lifecycle.append(record)
             _write_audit(
                 "intake.stage_changed",
@@ -814,32 +846,30 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                 target_type="intake-lifecycle",
                 payload={"intent_id": intent_id, "stage": "received", "from_stage": None},
             )
+            marketplace = _current_marketplace()
 
         _send_json(self, 201, {
             "lifecycle": record,
-            "marketplace": _marketplace_state("received"),
+            "marketplace": marketplace,
         })
 
     def _get_marketplace(self, params: dict) -> None:
         """
         GET /marketplace — return lifecycle-aware marketplace access state.
-        No auth: returns state based on the most recent IntakeLifecycleRecord.
-        If no records exist, returns observer mode (default).
+        No auth. Review mode while any intake escalation is open; otherwise
+        follows the most recent IntakeLifecycleRecord (observer if none).
         Called under do_GET's _lock — do not re-acquire.
         """
         records = list(_intake_lifecycle)
-
-        latest_stage: str | None = None
-        if records:
-            latest_stage = records[-1].get("stage")
-
-        state = _marketplace_state(latest_stage)
+        latest_stage = records[-1].get("stage") if records else None
+        state = _current_marketplace()
         _send_json(self, 200, {
             "type": "marketplace-state",
             "mode": state["mode"],
             "access": state["access"],
             "banner": state["banner"],
             "latest_intake_stage": latest_stage,
+            "open_intake_escalations": _open_intake_escalation_count(),
             "total_submissions": len(records),
         })
 
@@ -914,11 +944,12 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                     "previous_record_id": lifecycle_id,
                 },
             )
+            marketplace = _current_marketplace()
 
         _send_json(self, 200, {
             "previous": source_record,
             "current": new_record,
-            "marketplace": _marketplace_state(to_stage),
+            "marketplace": marketplace,
         })
 
     def _post_operator_action(self, body: dict) -> None:
@@ -1082,12 +1113,13 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                     },
                 )
             escalations_out = [dict(e) for e in touched]
+            marketplace = _current_marketplace()
 
         _send_json(self, 200, {
             "previous": source_record,
             "current": new_record,
             "escalations": escalations_out,
-            "marketplace": _marketplace_state(to_stage),
+            "marketplace": marketplace,
         })
 
     def _get_cockpit_intake(self) -> None:
@@ -1150,6 +1182,20 @@ class GhostHQHandler(BaseHTTPRequestHandler):
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _is_loopback(host: str) -> bool:
+    return host in ("localhost", "::1") or host.startswith("127.")
+
+
+def _bind_block_message(host: str, allow_insecure_operator: bool) -> str:
+    """Why operator actions are refused for this bind ("" = allowed)."""
+    if _is_loopback(host) or allow_insecure_operator:
+        return ""
+    return (
+        f"Operator actions are disabled on non-loopback bind {host} (plain HTTP); "
+        "restart with --allow-insecure-operator to enable them"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Ghost Layer HQ HTTP server (dev-grade, stdlib only)"
@@ -1162,7 +1208,15 @@ def main() -> None:
         "--port", type=int, default=8000,
         help="Port (default: 8000)"
     )
+    parser.add_argument(
+        "--allow-insecure-operator", action="store_true",
+        help="Allow operator actions on a non-loopback bind (the token crosses the network in plain HTTP)"
+    )
     args = parser.parse_args()
+
+    global _operator_bind_block
+    loopback = _is_loopback(args.host)
+    _operator_bind_block = _bind_block_message(args.host, args.allow_insecure_operator)
 
     registry_source = "agents/registry.yaml (pyyaml)" if _YAML_AVAILABLE else "hardcoded fallback"
     agent_count = len(_registry.get("agents", []))
@@ -1173,10 +1227,14 @@ def main() -> None:
     print(f"[SERVE] Engine:   ghost-layer-core (GhostLayerEngine)")
     print(f"[SERVE] Base URL: http://{args.host}:{args.port}")
     print(f"[SERVE] State:    in-memory only (cleared on restart)")
-    operator_actions = "enabled" if os.environ.get(OPERATOR_TOKEN_ENV) else f"disabled (set {OPERATOR_TOKEN_ENV})"
+    if not os.environ.get(OPERATOR_TOKEN_ENV):
+        operator_actions = f"disabled (set {OPERATOR_TOKEN_ENV})"
+    elif _operator_bind_block:
+        operator_actions = f"disabled on {args.host} (pass --allow-insecure-operator)"
+    else:
+        operator_actions = "enabled"
     print(f"[SERVE] Operator actions: {operator_actions}")
-    loopback = args.host in ("localhost", "::1") or args.host.startswith("127.")
-    if os.environ.get(OPERATOR_TOKEN_ENV) and not loopback:
+    if os.environ.get(OPERATOR_TOKEN_ENV) and not loopback and not _operator_bind_block:
         print(f"[SERVE] WARNING: binding {args.host} over plain HTTP — the operator token "
               "is visible to anyone who can observe this network traffic.")
     print()

@@ -117,6 +117,32 @@ def test_auth_checked_before_input_validation(hq):
     assert status == 401
 
 
+@pytest.mark.parametrize("host, allow, blocked", [
+    ("127.0.0.1", False, False),
+    ("127.0.1.1", False, False),
+    ("localhost", False, False),
+    ("::1", False, False),
+    ("0.0.0.0", False, True),
+    ("192.168.1.20", False, True),
+    ("0.0.0.0", True, False),
+])
+def test_bind_block_message(host, allow, blocked):
+    message = serve._bind_block_message(host, allow)
+    assert bool(message) is blocked
+    if blocked:
+        assert "--allow-insecure-operator" in message
+
+
+def test_non_loopback_bind_refuses_operator_actions(hq, monkeypatch):
+    record = _register(hq)
+    monkeypatch.setattr(serve, "_operator_bind_block", serve._bind_block_message("0.0.0.0", False))
+    before = _snapshot(hq)
+    status, body = _act(hq, record["id"], "approve")
+    assert status == 403
+    assert "--allow-insecure-operator" in body["error"]
+    assert _snapshot(hq) == before
+
+
 @pytest.mark.parametrize("scheme", ["bearer", "BEARER", "Bearer"])
 def test_bearer_scheme_is_case_insensitive(hq, scheme):
     record = _register(hq)
@@ -316,16 +342,56 @@ def test_stale_record_rejected_for_actions(hq):
     assert "Stale" in body["error"]
 
 
-def test_reregistering_intent_is_rejected(hq):
-    record = _register(hq, intent_id="intent-123")
-    _ok(hq, record["id"], "escalate")
+@pytest.mark.parametrize("intent_id", ["intent-123", "", 7])
+def test_register_rejects_client_supplied_intent_id(hq, intent_id):
+    # Ids are server-generated, so an existing intent can't be re-registered
+    # (undoing an escalation) and a future id can't be claimed in advance.
+    escalated = _record_at(hq, "escalated")
     before = _snapshot(hq)
 
-    status, body = hq.post("/api/register", {"raw": "again", "intent_id": "intent-123"})
+    status, body = hq.post("/api/register", {"raw": "x", "intent_id": intent_id})
 
-    assert status == 409
-    assert "already registered" in body["error"]
+    assert status == 400
+    assert "assigned by the server" in body["error"]
     assert _snapshot(hq) == before
+    status, _ = hq.post("/api/register", {"raw": "x", "intent_id": escalated["intent_id"]})
+    assert status == 400
+
+
+def test_registered_intent_ids_are_unique_server_ids(hq):
+    ids = {_register(hq)["intent_id"] for _ in range(5)}
+    assert len(ids) == 5
+
+
+def test_open_escalation_keeps_marketplace_in_review_for_everyone(hq):
+    a = _record_at(hq, "escalated")
+    b = _register(hq)
+
+    # Approving a different intake does not lift review while A is open.
+    approved_b = _ok(hq, b["id"], "approve")
+    assert approved_b["marketplace"]["mode"] == "review"
+    market = hq.get("/marketplace")[1]
+    assert (market["mode"], market["latest_intake_stage"], market["open_intake_escalations"]) \
+        == ("review", "validated", 1)
+
+    # New registrations and public transitions report review too.
+    status, body = hq.post("/api/register", {"raw": "x"})
+    assert body["marketplace"]["mode"] == "review"
+    status, body = hq.post(TRANSITION, {"lifecycle_id": approved_b["current"]["id"], "to_stage": "queued"})
+    assert body["marketplace"]["mode"] == "review"
+
+    # Clearing A's escalation lifts review; state follows the latest record again.
+    cleared = _ok(hq, a["id"], "approve")
+    assert cleared["marketplace"]["mode"] == "full"
+    assert hq.get("/marketplace")[1]["open_intake_escalations"] == 0
+
+
+def test_gov3_escalations_from_intents_do_not_gate_marketplace(hq):
+    hq.post("/intents", {"raw": "urgent", "source": "t", "tags": ["critical"]})
+    assert hq.get("/escalations?status=pending")[1]          # GOV-3 escalation exists
+    _register(hq)
+    market = hq.get("/marketplace")[1]
+    assert (market["mode"], market["open_intake_escalations"]) == ("observer", 0)
 
 
 def test_escalated_cannot_leave_via_public_transition(hq):
@@ -403,7 +469,7 @@ def test_non_object_json_body_is_rejected(hq, path, raw):
     (TRANSITION, {"lifecycle_id": "x", "to_stage": ["validated"]}, "to_stage"),
     (TRANSITION, {"lifecycle_id": "x", "to_stage": "validated", "notes": 1}, "notes"),
     ("/api/register", {"raw": "x", "notes": 5}, "notes"),
-    ("/api/register", {"raw": "x", "intent_id": 7}, "intent_id"),
+    ("/api/register", {"raw": 1}, "raw"),
 ])
 def test_non_string_fields_are_rejected(hq, path, payload, field):
     before = _snapshot(hq)
