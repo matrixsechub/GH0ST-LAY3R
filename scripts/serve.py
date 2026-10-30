@@ -26,6 +26,7 @@ Endpoints:
     POST /api/register                     — submit intake; creates IntakeLifecycleRecord stage=received
     GET  /marketplace                      — lifecycle-aware banner (observer/full/review mode)
     POST /intake-agent-v2/lifecycle/transition — advance stage: received→validated→queued→processed
+                                             (→validated needs Bearer GHOST_OPERATOR_TOKEN)
     POST /intake-agent-v2/lifecycle/action — operator-only (Bearer GHOST_OPERATOR_TOKEN):
                                              approve / escalate / close / reassign / annotate
     GET  /cockpit/intake                   — read-only panel stub (status, timeline, last 10 submissions)
@@ -284,6 +285,11 @@ _INTAKE_VALID_TRANSITIONS: dict = {
     "validated": {"queued"},
     "queued":    {"processed"},
 }
+
+# Target stages the transition endpoint only moves to with the operator token.
+# "validated" grants full marketplace access, so reaching it without the token
+# would be an unauthenticated "approve".
+_OPERATOR_ONLY_STAGES = frozenset({"validated"})
 
 # Operator actions: action -> {from_stage: to_stage}. A stage missing from an
 # action's map means the action is not allowed from that stage. "processed"
@@ -879,6 +885,8 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         Body: {"lifecycle_id": "...", "to_stage": "validated", "notes": "..."}
         Validates the transition against _INTAKE_VALID_TRANSITIONS and
         appends a new IntakeLifecycleRecord (append-only; does not mutate).
+        Moving to a stage in _OPERATOR_ONLY_STAGES ("validated", which grants
+        marketplace access) requires the operator token, like the approve action.
         """
         bad_field = _non_string_field(body, "lifecycle_id", "to_stage", "notes")
         if bad_field:
@@ -891,6 +899,13 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         if not lifecycle_id or not to_stage:
             _send_error(self, 400, "'lifecycle_id' and 'to_stage' are required")
             return
+
+        by_operator = to_stage in _OPERATOR_ONLY_STAGES
+        if by_operator:
+            auth_error = _operator_auth_error(self.headers.get("Authorization", ""))
+            if auth_error:
+                _send_error(self, *auth_error)
+                return
 
         with _lock:
             source_record = next(
@@ -933,8 +948,8 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             _intake_lifecycle.append(new_record)
             _write_audit(
                 "intake.stage_changed",
-                actor_id="system",
-                actor_type="system",
+                actor_id=_registered_operator_id() if by_operator else "system",
+                actor_type="operator" if by_operator else "system",
                 target_id=new_record["id"],
                 target_type="intake-lifecycle",
                 payload={

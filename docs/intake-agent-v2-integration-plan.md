@@ -186,15 +186,15 @@ Endpoints added to `scripts/serve.py`:
 | GET  | `/intake-agent-v2/metrics` | Per-stage counts |
 | POST | `/api/register` | Public intake submission → `received` record |
 | GET  | `/marketplace` | Access mode + banner from latest stage |
-| POST | `/intake-agent-v2/lifecycle/transition` | Advance one record one stage |
+| POST | `/intake-agent-v2/lifecycle/transition` | Advance one record one stage (token required to reach `validated`) |
 | POST | `/intake-agent-v2/lifecycle/action` | Operator action (token required) |
 | GET  | `/cockpit/intake` | Read-only operator panel |
 
-> **Security:** `POST /api/register` and `POST /intake-agent-v2/lifecycle/transition`
-> have no authentication. Anyone who can reach the server can advance a
-> record from `received` to `validated` — the same result as the operator's
-> `approve` — and unlock full marketplace access. Only the operator action
-> endpoint is protected. Run `serve.py` on localhost only (its default bind).
+> **Security:** reaching `validated` (full marketplace access) needs the
+> operator token, through either the `approve` action or the transition
+> endpoint. `POST /api/register`, the `validated → queued → processed`
+> transitions, and all GET endpoints have no authentication. Run `serve.py`
+> on localhost only (its default bind).
 
 ### GET /agents/intake-agent-v2
 Returns the registry entry for `intake-agent-v2` from `_registry["agents"]`.
@@ -239,7 +239,11 @@ Returns `{"mode", "access", "banner", "latest_intake_stage",
 Body: `{"lifecycle_id": "...", "to_stage": "...", "notes"?: "..."}`. Returns
 200 with `{"previous", "current", "marketplace"}`; 400 for missing fields;
 404 for an unknown `lifecycle_id`; 409 if `lifecycle_id` is not the
-intent's newest record; 422 for a disallowed transition.
+intent's newest record; 422 for a disallowed transition. Moving to
+`validated` requires `Authorization: Bearer <GHOST_OPERATOR_TOKEN>`, checked
+before the record lookup (401/403, same rules as the action endpoint), and
+is audited with the operator as the actor. `queued` and `processed` need no
+token.
 
 ### POST /intake-agent-v2/lifecycle/action
 Header: `Authorization: Bearer <GHOST_OPERATOR_TOKEN>`. Body:

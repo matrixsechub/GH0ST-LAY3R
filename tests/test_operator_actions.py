@@ -56,7 +56,7 @@ def _record_at(hq, stage: str) -> dict:
     }[stage]
     for kind, step in path:
         if kind == "transition":
-            status, body = hq.post(TRANSITION, {"lifecycle_id": record["id"], "to_stage": step})
+            status, body = hq.post(TRANSITION, {"lifecycle_id": record["id"], "to_stage": step}, AUTH)
             assert status == 200, body
             record = body["current"]
         else:
@@ -326,7 +326,7 @@ def test_stale_record_cannot_bypass_escalation_via_transition(hq):
     _ok(hq, original["id"], "escalate")
     before = _snapshot(hq)
 
-    status, body = hq.post(TRANSITION, {"lifecycle_id": original["id"], "to_stage": "validated"})
+    status, body = hq.post(TRANSITION, {"lifecycle_id": original["id"], "to_stage": "validated"}, AUTH)
 
     assert status == 409
     assert "Stale" in body["error"]
@@ -394,10 +394,65 @@ def test_gov3_escalations_from_intents_do_not_gate_marketplace(hq):
     assert (market["mode"], market["open_intake_escalations"]) == ("observer", 0)
 
 
+# ---------------------------------------------------------------------------
+# Public transition to "validated" needs the operator token
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer wrong"}])
+def test_transition_to_validated_requires_token(hq, headers):
+    record = _register(hq)
+    before = _snapshot(hq)
+    status, body = hq.post(TRANSITION, {"lifecycle_id": record["id"], "to_stage": "validated"}, headers)
+    assert status == 401
+    assert _snapshot(hq) == before
+    assert hq.get("/marketplace")[1]["access"] is False
+
+
+def test_transition_to_validated_refused_when_token_unset(hq, monkeypatch):
+    record = _register(hq)
+    monkeypatch.delenv(serve.OPERATOR_TOKEN_ENV)
+    status, body = hq.post(TRANSITION, {"lifecycle_id": record["id"], "to_stage": "validated"}, AUTH)
+    assert status == 403
+    assert serve.OPERATOR_TOKEN_ENV in body["error"]
+
+
+def test_transition_to_validated_refused_on_non_loopback_bind(hq, monkeypatch):
+    record = _register(hq)
+    monkeypatch.setattr(serve, "_operator_bind_block", serve._bind_block_message("0.0.0.0", False))
+    status, body = hq.post(TRANSITION, {"lifecycle_id": record["id"], "to_stage": "validated"}, AUTH)
+    assert status == 403
+    assert "--allow-insecure-operator" in body["error"]
+
+
+def test_transition_token_checked_before_record_lookup(hq):
+    # No token: 401 even for an unknown id, so the endpoint doesn't reveal
+    # which ids exist to unauthenticated callers.
+    status, _ = hq.post(TRANSITION, {"lifecycle_id": "does-not-exist", "to_stage": "validated"})
+    assert status == 401
+
+
+def test_queued_and_processed_transitions_stay_public(hq):
+    validated = _record_at(hq, "validated")
+    status, body = hq.post(TRANSITION, {"lifecycle_id": validated["id"], "to_stage": "queued"})
+    assert status == 200, body
+    status, body = hq.post(TRANSITION, {"lifecycle_id": body["current"]["id"], "to_stage": "processed"})
+    assert status == 200, body
+
+
+def test_transition_audit_actor_reflects_who_moved_it(hq):
+    validated = _record_at(hq, "validated")
+    hq.post(TRANSITION, {"lifecycle_id": validated["id"], "to_stage": "queued"})
+    events = hq.get("/audit?event_type=intake.stage_changed")[1]
+    assert [(e["payload"]["stage"], e["actor_type"], e["actor_id"]) for e in events[1:]] == [
+        ("validated", "operator", "lupe"),
+        ("queued", "system", "system"),
+    ]
+
+
 def test_escalated_cannot_leave_via_public_transition(hq):
     escalated = _record_at(hq, "escalated")
     for to_stage in ("validated", "queued", "processed"):
-        status, _ = hq.post(TRANSITION, {"lifecycle_id": escalated["id"], "to_stage": to_stage})
+        status, _ = hq.post(TRANSITION, {"lifecycle_id": escalated["id"], "to_stage": to_stage}, AUTH)
         assert status == 422
 
 

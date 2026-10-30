@@ -178,13 +178,14 @@ On a non-loopback bind (e.g. `--host 0.0.0.0`) operator actions are
 refused unless you also pass `--allow-insecure-operator`, because the token
 would cross the network in plain HTTP.
 
-**Security:** `POST /api/register` and `POST /intake-agent-v2/lifecycle/transition`
-are still unauthenticated — anyone who can reach the server can move a
-`received` intake to `validated` (the same result as the operator's
-`approve`) and unlock full marketplace access while no intake escalation is
-open. All GET endpoints are unauthenticated too, so operator notes are
-readable. Keep the default localhost bind until all endpoints are
-authenticated.
+The same token is required for `POST /intake-agent-v2/lifecycle/transition`
+when `to_stage` is `validated`, since that grants marketplace access; the
+`queued` and `processed` steps stay public.
+
+**Security:** `POST /api/register`, the public transition steps, and all GET
+endpoints are unauthenticated, so anyone who can reach the server can
+submit intakes, advance them after validation, and read operator notes.
+Keep the default localhost bind.
 
 Tests use `pytest` (`pip install pytest`), with files under `tests/`:
 

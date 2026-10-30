@@ -24,6 +24,13 @@ from conftest import REPO_ROOT
 
 OBSERVER_BANNER = "IntakeAgentV2: Access Pending — You are in Observer Mode."
 TRANSITION = "/intake-agent-v2/lifecycle/transition"
+TOKEN = "test-operator-token"
+AUTH = {"Authorization": f"Bearer {TOKEN}"}   # moving to "validated" needs the operator token
+
+
+@pytest.fixture(autouse=True)
+def _operator_token(monkeypatch):
+    monkeypatch.setenv(serve.OPERATOR_TOKEN_ENV, TOKEN)
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +44,7 @@ def _register(hq, source: str = "test") -> dict:
 
 
 def _transition(hq, lifecycle_id: str, to_stage: str) -> tuple[int, dict]:
-    return hq.post(TRANSITION, {"lifecycle_id": lifecycle_id, "to_stage": to_stage})
+    return hq.post(TRANSITION, {"lifecycle_id": lifecycle_id, "to_stage": to_stage}, AUTH)
 
 
 def _advance(hq, lifecycle_id: str, *stages: str) -> str:
@@ -192,7 +199,7 @@ def test_invalid_transitions_are_rejected_without_side_effects(hq, from_stages, 
     ({"lifecycle_id": "does-not-exist", "to_stage": "validated"}, 404),
 ])
 def test_transition_input_validation(hq, payload, code):
-    status, body = hq.post(TRANSITION, payload)
+    status, body = hq.post(TRANSITION, payload, AUTH)
     assert status == code
     assert "error" in body
 
