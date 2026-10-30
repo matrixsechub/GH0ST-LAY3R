@@ -149,7 +149,8 @@ PYTHONPATH=. python3 scripts/serve.py [--port 8000]   # HQ HTTP server (see belo
 `scripts/serve.py` starts a single-process, dev-grade HTTP server that wraps
 `GhostLayerEngine` and exposes a subset of `API_CONTRACT.md` v2 endpoints:
 `POST /intents`, `GET /hq/health`, `GET /audit`, `GET /audit/:id`,
-`GET /escalations`, `GET /escalations/:id`, `PATCH /escalations/:id`,
+`GET /escalations`, `GET /escalations/:id`, `POST /escalations`,
+`PATCH /escalations/:id`,
 `GET /operator/sessions`, `GET /operator/sessions/:id`,
 `POST /operator/sessions`, `PATCH /operator/sessions/:id`,
 `GET /agents`, `GET /agents/:id`, `GET /engines`, `GET /operators`,
@@ -188,7 +189,17 @@ when `to_stage` is `validated`, since that grants marketplace access; the
 `AGENT_HQ.md`'s Escalation Lifecycle: anyone may move `pending →
 acknowledged`; `resolved` and `dismissed` need the token. Closing an
 intake's escalation this way leaves the intake `escalated` (no marketplace
-access) until the operator approves or closes it.
+access) until the operator approves or closes it. `POST /escalations` is
+open to anyone, as the Escalation Lifecycle allows (a token, if sent, must
+be valid and attributes the escalation to the operator), except on an
+intake's intent: an open intake escalation suspends marketplace access for
+every client, so that needs the token. It accepts only
+the rules that escalate (`GOV-1`, `GOV-2`, `GOV-3`, `GOV-5`, with their
+default severities), an intent the server has seen, and registered agent
+ids; it creates a `pending` escalation, which holds the intent in
+`operator-review` (ROUTE-6) until the operator closes it. So anyone who can
+reach the server can put any known non-intake intent under review: keep the
+default localhost bind.
 
 **Operator presence (GOV-7)** comes only from an open session: the operator
 opens one with `POST /operator/sessions` and closes it with
@@ -372,7 +383,8 @@ operator. Full detail (rule tables, schema, YAML) lives in `AGENT_HQ.md`'s
 these rules. The only enforcement anywhere in this repo is the dev-grade
 `scripts/serve.py`: GOV-3 auto-escalation on `POST /intents`, GOV-7 posture
 while a token-gated operator session is open, ROUTE-6 `operator-review`
-holds recorded as audit events, token-gated intake operator
+holds recorded as audit events, `POST /escalations` for GOV-1/2/3/5
+escalations raised by callers, token-gated intake operator
 actions that open,
 resolve, and dismiss `EscalationEvent`s, and `PATCH /escalations/:id`, which
 implements the Escalation Lifecycle state machine (resolve and dismiss need
