@@ -70,4 +70,6 @@ def _reset_hq_state():
         serve._escalations.clear()
         serve._sessions.clear()
         serve._pools.clear()
+        serve._intent_lanes.clear()
+        serve._route6_held.clear()
     yield

@@ -198,6 +198,17 @@ time). While a session is open, every `POST /intents` gets GOV-7 posture
 `active_intent_ids`. An intent is recorded as the operator's only when it
 carries the token. The old `X-Ghost-Operator-Online` header is ignored.
 
+**Lanes (ROUTE-1, ROUTE-6)** are recorded, never dispatched. `POST /intents`
+records the intent's lane in its `intent.submitted` audit payload: the
+operator's `priority_lane` for a token-bearing intent (ROUTE-1), else
+`RouteAdvisoryAgent`'s `suggested_lane`. While an intent has any `pending`
+or `acknowledged` escalation, ROUTE-6 holds it in the reserved
+`operator-review` lane; the hold and its release (when the last such
+escalation is resolved or dismissed, back to that lane or an intake's
+operator-assigned lane) are each an `intent.routed` audit event, so
+`GET /audit?event_type=intent.routed&target_id=<intent_id>` gives an
+intent's routing history.
+
 **Security:** `POST /api/register`, the public transition steps, and all GET
 endpoints are unauthenticated, so anyone who can reach the server can
 submit intakes, advance them after validation, and read operator notes.
@@ -360,7 +371,8 @@ operator. Full detail (rule tables, schema, YAML) lives in `AGENT_HQ.md`'s
 **Same non-goals as the rest of Agent HQ:** the engine enforces none of
 these rules. The only enforcement anywhere in this repo is the dev-grade
 `scripts/serve.py`: GOV-3 auto-escalation on `POST /intents`, GOV-7 posture
-while a token-gated operator session is open, token-gated intake operator
+while a token-gated operator session is open, ROUTE-6 `operator-review`
+holds recorded as audit events, token-gated intake operator
 actions that open,
 resolve, and dismiss `EscalationEvent`s, and `PATCH /escalations/:id`, which
 implements the Escalation Lifecycle state machine (resolve and dismiss need

@@ -233,6 +233,8 @@ _escalations: list = []      # EscalationEvent dicts
 _sessions: list = []         # OperatorSessionRecord dicts
 _pools: list = []            # AgentPool dicts (empty until created via future endpoint)
 _intake_lifecycle: list = []  # IntakeLifecycleRecord dicts, append-only
+_intent_lanes: dict = {}     # intent_id -> lane recorded at POST /intents (ROUTE-1 / suggested_lane)
+_route6_held: set = set()    # intent_ids currently held in OPERATOR_REVIEW_LANE by ROUTE-6
 
 # Routing table: seeded at startup; NOT constellation activation (GOV-4 gate).
 # IntakeAgentV2 handles these tags via routing-only mode until GOV-4 is lifted.
@@ -320,6 +322,11 @@ _ESCALATION_TRANSITIONS: dict = {
 }
 _ESCALATION_STATUSES = ("acknowledged", "resolved", "dismissed")
 _OPERATOR_ONLY_ESCALATION_STATUSES = frozenset({"resolved", "dismissed"})
+
+# ROUTE-6 (AGENT_HQ.md): an intent with a pending or acknowledged escalation
+# is routed here, overriding any other lane, until every such escalation is
+# resolved or dismissed. Recorded as audit events only; nothing dispatches.
+OPERATOR_REVIEW_LANE = "operator-review"
 
 # Shared secret for operator actions. Unset = operator actions disabled (fail closed).
 OPERATOR_TOKEN_ENV = "GHOST_OPERATOR_TOKEN"
@@ -651,6 +658,58 @@ def _maybe_raise_gov3(intent_id: str, request_tags: list, volatility: float) -> 
         target_type="escalation",
         payload={"trigger_rule": "GOV-3", "severity": severity},
     )
+    _sync_route6(intent_id, esc["id"])
+
+
+def _suggested_lane(envelope: dict) -> str:
+    """RouteAdvisoryAgent's suggested_lane from an output envelope, or ""."""
+    for entry in envelope.get("payload", {}).get("agents", []):
+        lane = entry.get("result", {}).get("suggested_lane") if isinstance(entry, dict) else None
+        if isinstance(lane, str):
+            return lane
+    return ""
+
+
+def _base_lane(intent_id: str) -> str:
+    """
+    The lane an intent returns to when ROUTE-6 releases it: an intake's
+    operator-assigned lane, else the lane recorded at POST /intents.
+    Caller must hold _lock.
+    """
+    record = _latest_intake_record(intent_id)
+    if record is not None and record.get("assigned_lane"):
+        return record["assigned_lane"]
+    return _intent_lanes.get(intent_id, "")
+
+
+def _sync_route6(intent_id: str, escalation_id: str) -> None:
+    """
+    Apply ROUTE-6 after an escalation for `intent_id` opened or changed
+    status: hold the intent in OPERATOR_REVIEW_LANE while any of its
+    escalations is open, release it when none is, and audit each change as
+    intent.routed. Caller must hold _lock.
+    """
+    held = any(
+        e.get("intent_id") == intent_id and e.get("status") in ("pending", "acknowledged")
+        for e in _escalations
+    )
+    if held == (intent_id in _route6_held):
+        return
+    if held:
+        _route6_held.add(intent_id)
+        from_lane, lane = _base_lane(intent_id), OPERATOR_REVIEW_LANE
+    else:
+        _route6_held.discard(intent_id)
+        from_lane, lane = OPERATOR_REVIEW_LANE, _base_lane(intent_id)
+    _write_audit(
+        "intent.routed",
+        actor_id="ghost-layer-core",
+        actor_type="system",
+        target_id=intent_id,
+        target_type="intent",
+        payload={"rule": "ROUTE-6", "held": held, "from_lane": from_lane, "lane": lane,
+                 "escalation_id": escalation_id},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -886,6 +945,15 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                     payload={"rule": "GOV-7", "session_id": session_id, "source": source},
                 )
 
+            # ROUTE-1: the operator's priority lane overrides any suggested_lane.
+            # ROUTE-6 may still hold the intent in operator-review below.
+            if by_operator:
+                operator = next((o for o in _registry.get("operators", []) if o.get("operator_id") == op_id), {})
+                lane = operator.get("priority_lane", "operator")
+            else:
+                lane = _suggested_lane(envelope)
+            _intent_lanes[intent_id] = lane
+
             # Routing table check — advisory, not constellation activation.
             routing_matches = _check_routing_table(request_tags)
             routing_info = [
@@ -902,6 +970,7 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                 payload={
                     "source": source,
                     "gov7_active": gov7_active,
+                    "lane": lane,
                     "routing_matches": routing_info,
                 },
             )
@@ -1078,6 +1147,7 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                 target_type="escalation",
                 payload={"from_status": from_status, "status": status},
             )
+            _sync_route6(escalation.get("intent_id", ""), escalation_id)
             updated = dict(escalation)
 
         _send_json(self, 200, updated)
@@ -1358,6 +1428,7 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                     payload={"trigger_rule": "operator-manual", "severity": severity,
                              "intake_record_id": new_record["id"]},
                 )
+                _sync_route6(intent_id, esc["id"])
             elif action in ("approve", "close"):
                 # Any open escalation for the intent ends when the operator
                 # approves or closes it, whatever stage it was in.
@@ -1386,6 +1457,7 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                     esc["resolved_at"] = now
                     esc["resolution"] = f"{action}: {notes}" if notes else action
                     touched.append(esc)
+                    _sync_route6(intent_id, esc["id"])
 
             _write_audit(
                 "intake.operator_action",
