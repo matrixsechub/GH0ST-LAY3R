@@ -243,8 +243,10 @@ class OperatorSessionRecord:
     (more transparency, caution, verbosity, deference). This record is the
     single authoritative signal for GOV-7 — no other mechanism determines
     operator presence. Only the registered operator (operator_id matching
-    an OperatorEntry) may open or close their own session. See AGENT_HQ.md's
-    "Operator Surfaces" section.
+    an OperatorEntry) may open or close their own session. The dev-grade
+    scripts/serve.py implements this via the token-gated
+    /operator/sessions endpoints. See AGENT_HQ.md's "Operator Surfaces"
+    section.
     """
 
     session_id: str

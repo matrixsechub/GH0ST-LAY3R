@@ -302,7 +302,10 @@ Fetch a single `OperatorSessionRecord` by `session_id`.
 ### `POST /operator/sessions`
 
 Open a new operator session. Only callable by the registered operator.
-Produces `AuditEvent(event_type="operator.session_opened")`.
+Produces `AuditEvent(event_type="operator.session_opened")`. (The dev-grade
+`scripts/serve.py` implements the `/operator/sessions` group for local
+testing, using the `GHOST_OPERATOR_TOKEN` bearer token as operator identity
+and allowing one open session at a time; see `CLAUDE.md`.)
 
 Request (server assigns `session_id`, `started_at`):
 

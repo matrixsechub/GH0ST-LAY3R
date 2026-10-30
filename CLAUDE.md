@@ -149,7 +149,9 @@ PYTHONPATH=. python3 scripts/serve.py [--port 8000]   # HQ HTTP server (see belo
 `scripts/serve.py` starts a single-process, dev-grade HTTP server that wraps
 `GhostLayerEngine` and exposes a subset of `API_CONTRACT.md` v2 endpoints:
 `POST /intents`, `GET /hq/health`, `GET /audit`, `GET /escalations`,
-`GET /escalations/:id`, `PATCH /escalations/:id`,
+`GET /escalations/:id`, `PATCH /escalations/:id`, `GET /operator/sessions`,
+`GET /operator/sessions/:id`, `POST /operator/sessions`,
+`PATCH /operator/sessions/:id`,
 `GET /agents`, `GET /engines`, `GET /operators`, `GET /agent-pools`, plus the
 Intake Agent v2 bootstrap routes (`POST /api/register`, `GET /marketplace`,
 `POST /intake-agent-v2/lifecycle/transition`, `POST /intake-agent-v2/lifecycle/action`,
@@ -186,6 +188,14 @@ when `to_stage` is `validated`, since that grants marketplace access; the
 acknowledged`; `resolved` and `dismissed` need the token. Closing an
 intake's escalation this way leaves the intake `escalated` (no marketplace
 access) until the operator approves or closes it.
+
+**Operator presence (GOV-7)** comes only from an open session: the operator
+opens one with `POST /operator/sessions` and closes it with
+`PATCH /operator/sessions/:id` (both need the token; one open session at a
+time). While a session is open, every `POST /intents` gets GOV-7 posture
+(a `gov_rule.fired` audit event) and is linked to the session's
+`active_intent_ids`. An intent is recorded as the operator's only when it
+carries the token. The old `X-Ghost-Operator-Online` header is ignored.
 
 **Security:** `POST /api/register`, the public transition steps, and all GET
 endpoints are unauthenticated, so anyone who can reach the server can
@@ -348,8 +358,9 @@ operator. Full detail (rule tables, schema, YAML) lives in `AGENT_HQ.md`'s
 
 **Same non-goals as the rest of Agent HQ:** the engine enforces none of
 these rules. The only enforcement anywhere in this repo is the dev-grade
-`scripts/serve.py`: GOV-3 auto-escalation on `POST /intents`, GOV-7 via
-`X-Ghost-Operator-Online`, token-gated intake operator actions that open,
+`scripts/serve.py`: GOV-3 auto-escalation on `POST /intents`, GOV-7 posture
+while a token-gated operator session is open, token-gated intake operator
+actions that open,
 resolve, and dismiss `EscalationEvent`s, and `PATCH /escalations/:id`, which
 implements the Escalation Lifecycle state machine (resolve and dismiss need
 the operator's token). Those escalations live in an in-memory list, not a queue or
