@@ -77,14 +77,21 @@ While any intake escalation is open (`pending` or `acknowledged`, for an
 intent that has lifecycle records), `GET /marketplace` reports `review`
 for everyone, so approving one intake cannot grant access while another is
 under review. GOV-3 escalations raised by `POST /intents` have no intake
-and do not gate the marketplace. Otherwise it follows the most recently
-appended lifecycle record:
+and do not gate the marketplace. Otherwise it is `full` while any intake
+currently has access, and `observer` if none does.
 
-| Latest stage                         | `mode`     | `access` | Banner |
-|--------------------------------------|------------|----------|--------|
-| none, `received`, `queued`, `processed` | `observer` | `false`  | "IntakeAgentV2: Access Pending — You are in Observer Mode." |
-| `validated`                          | `full`     | `true`   | none |
-| `escalated`                          | `review`   | `false`  | "IntakeAgentV2: Operator Review in Progress — Access suspended pending resolution." |
+An intake gains access when it reaches `validated`, either through the
+operator's `approve` or the token-gated transition. It loses access only
+when the operator escalates or closes it. Everything a caller can do without
+the token, such as registering intakes or moving them through `queued` and
+`processed`, leaves access unchanged. Annotate and reassign leave it
+unchanged too. So only the operator can move the marketplace out of `full`.
+
+| State                                          | `mode`     | `access` | Banner |
+|------------------------------------------------|------------|----------|--------|
+| an intake escalation is open                   | `review`   | `false`  | "IntakeAgentV2: Operator Review in Progress — Access suspended pending resolution." |
+| otherwise, some intake has access              | `full`     | `true`   | none |
+| otherwise                                      | `observer` | `false`  | "IntakeAgentV2: Access Pending — You are in Observer Mode." |
 
 There is no identity layer, so this is one global state for the server,
 not per-user. The register, transition, and action responses include the

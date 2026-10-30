@@ -135,10 +135,11 @@ def test_marketplace_defaults_to_observer_with_no_records(hq):
 @pytest.mark.parametrize("stages, mode, access", [
     ((), "observer", False),
     (("validated",), "full", True),
-    (("validated", "queued"), "observer", False),
-    (("validated", "queued", "processed"), "observer", False),
+    # The public queued/processed steps keep the access validation granted.
+    (("validated", "queued"), "full", True),
+    (("validated", "queued", "processed"), "full", True),
 ])
-def test_marketplace_mode_tracks_latest_stage(hq, stages, mode, access):
+def test_marketplace_mode_follows_validation(hq, stages, mode, access):
     _advance(hq, _register(hq)["lifecycle"]["id"], *stages)
     _, body = hq.get("/marketplace")
     assert (body["mode"], body["access"]) == (mode, access)
@@ -204,14 +205,14 @@ def test_transition_input_validation(hq, payload, code):
     assert "error" in body
 
 
-def test_latest_state_follows_append_order_across_chains(hq):
+def test_registering_another_intake_does_not_revoke_access(hq):
     chain_a = _register(hq, source="A")["lifecycle"]["id"]
     _advance(hq, chain_a, "validated")
     _register(hq, source="B")  # appended after chain A's validated record
 
     _, body = hq.get("/marketplace")
-    assert body["latest_intake_stage"] == "received"
-    assert body["mode"] == "observer"
+    assert body["latest_intake_stage"] == "received"   # still reports the newest record
+    assert body["mode"] == "full"                      # but A's access stands
 
 
 # ---------------------------------------------------------------------------

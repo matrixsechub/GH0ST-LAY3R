@@ -412,16 +412,35 @@ def _open_intake_escalation_count() -> int:
     )
 
 
+def _intents_with_access() -> set:
+    """
+    Intents whose history currently grants marketplace access. Reaching
+    "validated" (operator approve, or the token-gated transition) grants it;
+    being escalated or closed by the operator revokes it. Everything a caller
+    can do without the token (register, the validated -> queued -> processed
+    steps) and annotate / reassign leave it unchanged. Caller must hold _lock.
+    """
+    access: dict = {}
+    for record in _intake_lifecycle:
+        intent_id = record.get("intent_id")
+        if record.get("stage") == "validated":
+            access[intent_id] = True
+        elif record.get("stage") == "escalated" or record.get("operator_action") == "close":
+            access[intent_id] = False
+    return {intent_id for intent_id, granted in access.items() if granted}
+
+
 def _current_marketplace() -> dict:
     """
-    The marketplace state everyone sees (there is no identity layer). Any
-    open intake escalation puts it in review mode, so approving one intake
-    cannot grant access while another is under review; otherwise it follows
-    the most recently appended lifecycle record. Caller must hold _lock.
+    The marketplace state everyone sees (there is no identity layer):
+    review while any intake escalation is open, so approving one intake
+    cannot grant access while another is under review; otherwise full while
+    any intake has access (see _intents_with_access), else observer. Only
+    the operator can therefore move it out of full. Caller must hold _lock.
     """
     if _open_intake_escalation_count():
         return _marketplace_state("escalated")
-    return _marketplace_state(_intake_lifecycle[-1].get("stage") if _intake_lifecycle else None)
+    return _marketplace_state("validated" if _intents_with_access() else None)
 
 
 def _marketplace_state(latest_stage: str | None) -> dict:
@@ -863,7 +882,8 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         """
         GET /marketplace — return lifecycle-aware marketplace access state.
         No auth. Review mode while any intake escalation is open; otherwise
-        follows the most recent IntakeLifecycleRecord (observer if none).
+        full while any intake has access, else observer (_current_marketplace).
+        latest_intake_stage still reports the newest record's stage.
         Called under do_GET's _lock — do not re-acquire.
         """
         records = list(_intake_lifecycle)

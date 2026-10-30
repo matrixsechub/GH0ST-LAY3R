@@ -185,7 +185,9 @@ when `to_stage` is `validated`, since that grants marketplace access; the
 **Security:** `POST /api/register`, the public transition steps, and all GET
 endpoints are unauthenticated, so anyone who can reach the server can
 submit intakes, advance them after validation, and read operator notes.
-Keep the default localhost bind.
+Those public steps can't change marketplace access: it is granted only by
+reaching `validated` (token required) and revoked only by the operator's
+escalate or close. Keep the default localhost bind.
 
 Tests use `pytest` (`pip install pytest`), with files under `tests/`:
 

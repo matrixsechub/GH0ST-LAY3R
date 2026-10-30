@@ -430,6 +430,60 @@ def test_transition_to_validated_refused_on_non_loopback_bind(hq, monkeypatch):
     assert hq.get("/marketplace")[1]["access"] is False
 
 
+# ---------------------------------------------------------------------------
+# Only the operator can take marketplace access away
+# ---------------------------------------------------------------------------
+
+def test_anonymous_callers_cannot_revoke_access(hq):
+    validated = _record_at(hq, "validated")
+    assert hq.get("/marketplace")[1]["mode"] == "full"
+
+    # Advance the intake with ids read from the public lifecycle endpoint...
+    latest = hq.get("/intake-agent-v2/lifecycle")[1][-1]["id"]
+    queued = hq.post(TRANSITION, {"lifecycle_id": latest, "to_stage": "queued"})[1]["current"]
+    assert queued["intent_id"] == validated["intent_id"]
+    assert hq.get("/marketplace")[1]["mode"] == "full"
+    hq.post(TRANSITION, {"lifecycle_id": queued["id"], "to_stage": "processed"})
+    assert hq.get("/marketplace")[1]["mode"] == "full"
+
+    # ...or register new intakes: access stands.
+    for _ in range(3):
+        _register(hq)
+    assert hq.get("/marketplace")[1]["mode"] == "full"
+
+
+@pytest.mark.parametrize("stage", ["validated", "queued"])
+def test_operator_close_revokes_access(hq, stage):
+    record = _record_at(hq, stage)
+    body = _ok(hq, record["id"], "close")
+    assert body["marketplace"]["mode"] == "observer"
+    assert hq.get("/marketplace")[1]["mode"] == "observer"
+
+
+@pytest.mark.parametrize("stage", ["validated", "queued"])
+def test_operator_escalate_revokes_access_until_approved(hq, stage):
+    record = _record_at(hq, stage)
+    escalated = _ok(hq, record["id"], "escalate")["current"]
+    assert hq.get("/marketplace")[1]["mode"] == "review"
+    _ok(hq, escalated["id"], "close")
+    assert hq.get("/marketplace")[1]["mode"] == "observer"   # escalation then close: no access
+
+
+def test_access_holds_while_any_intake_has_it(hq):
+    a = _record_at(hq, "validated")
+    b = _record_at(hq, "validated")
+    _ok(hq, b["id"], "close")
+    assert hq.get("/marketplace")[1]["mode"] == "full"        # A still has access
+    _ok(hq, a["id"], "close")
+    assert hq.get("/marketplace")[1]["mode"] == "observer"
+
+
+def test_annotate_and_reassign_keep_access(hq):
+    validated = _record_at(hq, "validated")
+    _ok(hq, validated["id"], "annotate", notes="looks fine")
+    assert hq.get("/marketplace")[1]["mode"] == "full"
+
+
 def test_operator_lookup_failure_leaves_intake_unchanged(hq, monkeypatch):
     # The audit actor is resolved before the record is appended, so a failure
     # there cannot leave a validated intake behind without its audit event.
