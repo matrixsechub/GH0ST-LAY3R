@@ -231,6 +231,9 @@ Response: the upserted `EngineHealthRecord`.
 ### `GET /routing-table`
 
 List `RoutingTableEntry` records; filter by `active`, `target_engine_id`.
+(The dev-grade `scripts/serve.py` implements this and `GET /routing-table/:id`
+read-only over its seeded, never-dispatched table, in evaluation order —
+priority, then id; its entries also carry a `target_agent_id`.)
 
 ### `GET /routing-table/:id`
 
@@ -275,6 +278,10 @@ Remove an entry. Produces `AuditEvent(event_type="routing_table.updated")`.
 ### `GET /capabilities`
 
 List `CapabilityIndex` records; optionally filter by `capability` substring.
+(The dev-grade `scripts/serve.py` implements this and
+`GET /capabilities/:capability`, deriving the index from the registry's
+engine and agent `capabilities` on each request; there is no rebuild
+endpoint.)
 
 ### `GET /capabilities/:capability`
 

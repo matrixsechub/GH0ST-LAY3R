@@ -375,11 +375,35 @@ def _active_session_id() -> str | None:
     return None
 
 
+def _routing_order(entry: dict) -> tuple:
+    """AGENT_HQ.md's evaluation order: ascending priority, ties broken by id."""
+    return entry.get("priority", 100), entry.get("id", "")
+
+
+def _capability_index() -> list:
+    """
+    CapabilityIndex records built from the registry's engine and agent
+    capabilities, sorted by capability. Caller must hold _lock.
+    """
+    index: dict = {}
+    for collection, key in (("engines", "provided_by_engines"), ("agents", "provided_by_agents")):
+        for record in _registry.get(collection, []):
+            for capability in record.get("capabilities", []):
+                entry = index.setdefault(capability, {
+                    "type": "capability-index",
+                    "capability": capability,
+                    "provided_by_engines": [],
+                    "provided_by_agents": [],
+                })
+                entry[key].append(record.get("id"))
+    return [index[c] for c in sorted(index)]
+
+
 def _check_routing_table(tags: list) -> list:
     """Return active routing entries whose match_tags intersect the provided tags."""
     tag_set = set(tags)
     matched = []
-    for entry in sorted(_routing_table, key=lambda e: e.get("priority", 100)):
+    for entry in sorted(_routing_table, key=_routing_order):
         if not entry.get("active"):
             continue
         if tag_set.intersection(entry.get("match_tags", [])):
@@ -846,6 +870,15 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             elif (operator_id := _id_from_path(path, "/operators")) is not None:
                 operator = _find_by(_registry.get("operators", []), "operator_id", operator_id)
                 self._send_record(operator, f"No operator: {operator_id}")
+            elif path == "/routing-table":
+                self._get_routing_table(params)
+            elif (entry_id := _id_from_path(path, "/routing-table")) is not None:
+                self._send_record(_find_by(_routing_table, "id", entry_id), f"No routing entry: {entry_id}")
+            elif path == "/capabilities":
+                self._get_capabilities(params)
+            elif (capability := _id_from_path(path, "/capabilities")) is not None:
+                self._send_record(_find_by(_capability_index(), "capability", capability),
+                                  f"No capability: {capability}")
             elif path == "/agent-pools":
                 _send_json(self, 200, list(_pools))
             elif (pool_id := _id_from_path(path, "/agent-pools")) is not None:
@@ -1052,6 +1085,30 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         if "until" in bounds:
             events = [e for e in events if _parse_timestamp(e["timestamp"]) <= bounds["until"]]
         _send_json(self, 200, events)
+
+    def _get_routing_table(self, params: dict) -> None:
+        """
+        GET /routing-table — entries in evaluation order (priority, then id),
+        filtered by active=true|false and target_engine_id. Read-only: the
+        entries are recorded as audit metadata, never dispatched.
+        """
+        entries = sorted(_routing_table, key=_routing_order)
+        active = params.get("active")
+        if active in ("true", "false"):
+            entries = [e for e in entries if bool(e.get("active")) == (active == "true")]
+        elif active is not None:
+            _send_error(self, 400, "'active' must be 'true' or 'false'")
+            return
+        if (engine_id := params.get("target_engine_id")) is not None:
+            entries = [e for e in entries if e.get("target_engine_id") == engine_id]
+        _send_json(self, 200, entries)
+
+    def _get_capabilities(self, params: dict) -> None:
+        """GET /capabilities — the capability index, filtered by `capability` substring."""
+        index = _capability_index()
+        if (fragment := params.get("capability")) is not None:
+            index = [c for c in index if fragment in c["capability"]]
+        _send_json(self, 200, index)
 
     def _get_escalations(self, params: dict) -> None:
         escs = list(_escalations)
