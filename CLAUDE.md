@@ -154,7 +154,9 @@ PYTHONPATH=. python3 scripts/serve.py [--port 8000]   # HQ HTTP server (see belo
 `GET /operator/sessions`, `GET /operator/sessions/:id`,
 `POST /operator/sessions`, `PATCH /operator/sessions/:id`,
 `GET /agents`, `GET /agents/:id`, `GET /engines`, `GET /operators`,
-`GET /operators/:id`, `GET /agent-pools`, `GET /agent-pools/:id`, plus the
+`GET /operators/:id`, `GET /agent-pools`, `GET /agent-pools/:id`,
+`GET /routing-table`, `GET /routing-table/:id`, `GET /capabilities`,
+`GET /capabilities/:capability`, plus the
 Intake Agent v2 bootstrap routes (`POST /api/register`, `GET /marketplace`,
 `POST /intake-agent-v2/lifecycle/transition`, `POST /intake-agent-v2/lifecycle/action`,
 `GET /intake-agent-v2/lifecycle`,
