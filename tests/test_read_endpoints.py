@@ -175,3 +175,41 @@ def test_repeated_query_parameter_is_400(hq, path):
     status, body = hq.get(path)
     assert status == 400
     assert "more than once" in body["error"]
+
+
+# ---------------------------------------------------------------------------
+# Blank query values are kept, not dropped
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("path", [
+    "/escalations?status=pending&status=",
+    "/audit?event_type=&event_type=a",
+    "/operator/sessions?active=&active=true",
+])
+def test_repeated_parameter_with_blank_value_is_400(hq, path):
+    status, body = hq.get(path)
+    assert status == 400
+    assert "more than once" in body["error"]
+
+
+@pytest.mark.parametrize("bound", ["since", "until"])
+def test_empty_time_bound_is_400(hq, bound):
+    _populate_audit(hq)
+    status, body = hq.get(f"/audit?{bound}=")
+    assert status == 400
+    assert "ISO 8601" in body["error"]
+
+
+@pytest.mark.parametrize("field", ["actor_id", "actor_type", "target_id", "target_type", "event_type"])
+def test_empty_exact_match_filter_matches_empty_values(hq, field):
+    _populate_audit(hq)
+    assert _events(hq, f"?{field}=") == [e for e in _events(hq) if e[field] == ""]
+
+
+def test_empty_escalation_and_session_filters_match_nothing(hq):
+    hq.post("/intents", {"raw": "urgent", "source": "t", "tags": ["critical"]})
+    hq.post("/operator/sessions", {"operator_id": "lupe"}, AUTH)
+    assert hq.get("/escalations?status=") == (200, [])
+    assert hq.get("/escalations?severity=") == (200, [])
+    assert hq.get("/operator/sessions?operator_id=") == (200, [])
+    assert hq.get("/operator/sessions?active=")[0] == 400

@@ -704,9 +704,9 @@ def _maybe_raise_gov3(intent_id: str, request_tags: list, volatility: float) -> 
 def _suggested_lane(envelope: dict) -> str:
     """RouteAdvisoryAgent's suggested_lane from an output envelope, or ""."""
     for entry in envelope.get("payload", {}).get("agents", []):
-        lane = entry.get("result", {}).get("suggested_lane") if isinstance(entry, dict) else None
-        if isinstance(lane, str):
-            return lane
+        if isinstance(entry, dict) and entry.get("agent") == "RouteAdvisoryAgent":
+            lane = entry.get("result", {}).get("suggested_lane")
+            return lane if isinstance(lane, str) else ""
     return ""
 
 
@@ -774,7 +774,9 @@ def _parse_path(raw_path: str) -> tuple[str, dict]:
     parsed = urlparse(raw_path)
     params = {
         k: v[0] if len(v) == 1 else v
-        for k, v in parse_qs(parsed.query).items()
+        # Keep blank values: '?since=' is an invalid bound and '?status=a&status='
+        # a repeated parameter, not silently absent filters.
+        for k, v in parse_qs(parsed.query, keep_blank_values=True).items()
     }
     return parsed.path.rstrip("/"), params
 
@@ -1043,7 +1045,7 @@ class GhostHQHandler(BaseHTTPRequestHandler):
                     return
         events = list(_audit_log)
         for field in ("actor_id", "actor_type", "target_id", "target_type", "event_type"):
-            if value := params.get(field):
+            if (value := params.get(field)) is not None:
                 events = [e for e in events if e.get(field) == value]
         if "since" in bounds:
             events = [e for e in events if _parse_timestamp(e["timestamp"]) >= bounds["since"]]
@@ -1053,17 +1055,17 @@ class GhostHQHandler(BaseHTTPRequestHandler):
 
     def _get_escalations(self, params: dict) -> None:
         escs = list(_escalations)
-        if status := params.get("status"):
+        if (status := params.get("status")) is not None:
             allowed = {s.strip() for s in status.split(",")}
             escs = [e for e in escs if e.get("status") in allowed]
-        if severity := params.get("severity"):
+        if (severity := params.get("severity")) is not None:
             escs = [e for e in escs if e.get("severity") == severity]
         _send_json(self, 200, escs)
 
     def _get_sessions(self, params: dict) -> None:
         """GET /operator/sessions — filter by operator_id and active=true|false."""
         sessions = list(_sessions)
-        if operator_id := params.get("operator_id"):
+        if (operator_id := params.get("operator_id")) is not None:
             sessions = [s for s in sessions if s.get("operator_id") == operator_id]
         active = params.get("active")
         if active in ("true", "false"):
@@ -1470,6 +1472,10 @@ class GhostHQHandler(BaseHTTPRequestHandler):
             return
         if action == "reassign" and not lane.strip():
             _send_error(self, 400, "'lane' is required for reassign")
+            return
+        if action == "reassign" and lane.strip() == OPERATOR_REVIEW_LANE:
+            # ROUTE-6 holds intents there; it is never a lane to release to.
+            _send_error(self, 422, f"'{OPERATOR_REVIEW_LANE}' is reserved for ROUTE-6 holds")
             return
         if action == "escalate" and severity not in _ESCALATION_SEVERITIES:
             _send_error(self, 400, f"'severity' must be one of {list(_ESCALATION_SEVERITIES)}")

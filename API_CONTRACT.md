@@ -31,10 +31,13 @@
 ## Design principle
 
 Every endpoint maps onto something that already exists and runs in this
-repo today, or — for `/escalations` — onto a schema this repo defines
-(`EscalationEvent`) even though nothing here populates it yet. Nothing
-here invents server-side behavior beyond exposing the existing engine
-and registry over HTTP.
+repo today, or onto a schema `core/registry.py` defines. The contract
+itself invents no server-side behavior beyond exposing the engine,
+registry, and those records over HTTP; the governance rules MSHOPS.NET
+must enforce are specified in `AGENT_HQ.md`, not here. (The dev-grade
+`scripts/serve.py` does implement a subset of those rules in memory, with
+operator approval — GOV-3, GOV-7, ROUTE-6, the Escalation Lifecycle — as
+`CLAUDE.md` lists.)
 
 ## Endpoints
 
