@@ -301,12 +301,16 @@ matching `agents/registry.yaml`, so the endpoint is reachable even without PyYAM
 | `escalation.status_changed` | `approve` / `close` from `escalated`       |
 
 These follow the existing dot-notation convention in `AuditEvent.event_type`.
-MSHOPS.NET's write path owns appending them to `_audit_log`; serve.py stubs
-return them via `GET /audit?target_type=intake-lifecycle`.
+`scripts/serve.py` appends them to its in-memory `_audit_log` (MSHOPS.NET
+owns the persistent write path). Read the intake events with
+`GET /audit?target_type=intake-lifecycle` and the escalation events with
+`GET /audit?target_type=escalation`.
 
 ---
 
 ## 8. Branch Strategy
+
+(Historical: the gh0st-lay3r branches below have all been merged into `main`.)
 
 | Branch                              | Contains                                   |
 |-------------------------------------|--------------------------------------------|

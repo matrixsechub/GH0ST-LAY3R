@@ -60,8 +60,8 @@ GH0ST-LAY3R/
 │   └── intake-agent-v2-integration-plan.md  # Intake Agent v2 lifecycle/routing spec
 ├── IMAGES/                # Diagram/banner assets referenced by README.md
 ├── README.md              # Aspirational "Ghost Layer Cosmology Engine" pitch (see gap note above)
-├── AGENT_HQ.md            # Agent HQ protocol + routing model (design spec, not implemented)
-├── API_CONTRACT.md        # Draft REST contract for the future MSHOPS.NET backend (spec only)
+├── AGENT_HQ.md            # Agent HQ protocol + routing model (design spec; serve.py implements a dev subset)
+├── API_CONTRACT.md        # Draft REST contract for the future MSHOPS.NET backend (serve.py implements a dev subset)
 ├── ABOUT.txt, GHOST_LAYER.txt, RELEASE_ANNOUNCEMENT.txt  # Narrative/marketing text
 ├── REPO_STRUCTURE_COMPLETE.txt  # Aspirational TS/Vercel scaffold description (not implemented)
 └── LICENSE.txt            # MIT, Copyright Guadalupe Gallegos (MatrixSecHub)
@@ -226,8 +226,9 @@ intent's routing history.
 endpoints are unauthenticated, so anyone who can reach the server can
 submit intakes, advance them after validation, and read operator notes.
 Those public steps can't change marketplace access: it is granted only by
-reaching `validated` (token required) and revoked only by the operator's
-escalate or close. Keep the default localhost bind.
+reaching `validated` (token required) and suspended or revoked only by
+token-gated actions (the operator's escalate or close, or a token-bearing
+`POST /escalations` on an intake). Keep the default localhost bind.
 
 Tests use `pytest` (`pip install pytest`), with files under `tests/`:
 
@@ -304,12 +305,17 @@ specs live in dedicated files so this document stays scannable:
 `create_default_engine()` in `core/engine.py` is unchanged. `scripts/serve.py`
 (see "Running things") is the sole integration layer: a dev-grade HTTP server
 that wraps the engine and exposes a subset of `API_CONTRACT.md` v2 endpoints
-for local development and integration testing. It adds no persistence. Its
-only logic beyond an HTTP skin is the Intake Agent v2 bootstrap: an
-in-memory routing table recorded as audit metadata (never dispatched — the
-agent does not run), the `received → validated → queued → processed`
-transition check, and token-gated operator actions that can open and close
-`EscalationEvent`s for intakes. Operator-approved per GOV-4. The registry/protocol/API docs remain parallel design artifacts
+for local development and integration testing. It adds no persistence. Beyond
+an HTTP skin it implements, in memory and operator-approved per GOV-4: the
+Intake Agent v2 bootstrap (a routing table recorded as audit metadata and
+never dispatched — the agent does not run — plus the `received → validated
+→ queued → processed` transition check and token-gated operator actions),
+the Escalation Lifecycle (`POST`/`PATCH /escalations`), GOV-3
+auto-escalation, GOV-7 operator sessions, ROUTE-1/ROUTE-6 lane records, and
+the audit trail — see "Running things" above and "HITL Governance Layer"
+below.
+None of it reaches `create_default_engine()`. Beyond that subset the
+registry/protocol/API docs remain parallel design artifacts
 describing a system that does not exist yet — do not wire additional spec
 behavior into the engine unless explicitly asked; that would conflate
 "documented plan" with "shipped behavior," which is exactly the gap this file

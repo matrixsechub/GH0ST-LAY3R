@@ -1,10 +1,12 @@
 # Agent HQ — Protocol & Routing Model
 
 > **Status: design specification.** Nothing in this document is
-> implemented as a server, daemon, or deployment in this repo. It
-> describes the architecture a future MSHOPS.NET backend will
+> implemented as a production server, daemon, or deployment in this repo.
+> It describes the architecture a future MSHOPS.NET backend will
 > implement, and it formalizes the extension point that already exists
 > in this repo's code (the `Agent` Protocol in `agents/constellation.py`).
+> The dev-grade `scripts/serve.py` implements a bounded, in-memory subset
+> for local testing; `CLAUDE.md` lists exactly which parts.
 > `CLAUDE.md` is canonical — if anything here conflicts with the actual
 > code, `CLAUDE.md` and the code win.
 
@@ -23,8 +25,8 @@
 - **Registry** — the catalog of known agents and engines, described by
   the schema in `core/registry.py` and populated, for what actually
   exists today, in `agents/registry.yaml`. The registry is a hand-
-  maintained spec artifact; nothing in this repo parses or enforces it
-  at runtime.
+  maintained spec artifact; the engine never reads it. Only the dev-grade
+  `scripts/serve.py` parses it, read-only, to serve registry endpoints.
 - **Intent** — an `IntentVector` (`core/types.py`): `id`, `source`,
   `description`, `tags`.
 - **Lane** — a free-form string an agent may *suggest* as a routing
@@ -138,10 +140,12 @@ that is MSHOPS.NET's job, using this field as its input.
 > **Status: design specification, technical governance — not lore.**
 > This section defines how agents and the future routing layer must
 > behave toward the Human-In-The-Loop (HITL) operator. It is policy for
-> a system that does not run yet: no runtime code in this repo enforces
-> any rule below, there is no throttling mechanism, no dispatch layer,
-> and no arbitration logic implemented here. These rules bind future
-> design work (this repo and MSHOPS.NET), not current engine behavior.
+> a system that does not run yet: the engine enforces no rule below, and
+> there is no throttling mechanism, dispatch layer, or arbitration logic
+> here. The dev-grade `scripts/serve.py` records a subset in memory
+> (GOV-3, GOV-7, ROUTE-1, ROUTE-6 and the Escalation Lifecycle; see
+> `CLAUDE.md`). These rules bind future design work (this repo and
+> MSHOPS.NET), not current engine behavior.
 
 ### Operator identity
 
@@ -259,9 +263,11 @@ events, not hand-maintained registry entries (see below).
 > **Status: design specification.** The engine never creates an
 > `EscalationEvent`. The only code that does is the dev-grade
 > `scripts/serve.py`, in memory: GOV-3 auto-escalation on `POST /intents`,
-> and token-gated intake operator actions that open escalations
+> `POST /escalations` for GOV-1/2/3/5 escalations raised by callers, and
+> token-gated intake operator actions that open escalations
 > (`trigger_rule: "operator-manual"`) and resolve or dismiss them (see
-> `docs/intake-agent-v2-integration-plan.md`). `PATCH /escalations/:id`
+> `docs/intake-agent-v2-integration-plan.md`); every open escalation holds
+> its intent in `operator-review` (ROUTE-6). `PATCH /escalations/:id`
 > implements the state machine below, including `acknowledged`, with the
 > operator token standing in for "the registered operator". It has no
 > persistence. This section defines the shape and state
@@ -400,7 +406,10 @@ capability failure); agent still receives intents.
 > **Status: design specification.** The only real engine today is
 > `ghost-layer-core`. All dispatch, capability indexing, and health-check
 > behavior described here is MSHOPS.NET's responsibility to implement.
-> Nothing in this repo implements routing, dispatch, or health checks.
+> Nothing in this repo implements dispatch or health checks. The dev-grade
+> `scripts/serve.py` serves its seeded routing table and a capability
+> index derived from the registry read-only (`GET /routing-table`,
+> `GET /capabilities`); routing matches are recorded, never dispatched.
 
 ### Capability-based dispatch
 
@@ -445,8 +454,11 @@ arbitration.
 
 ### Single-engine state today
 
-`ghost-layer-core` is the only real engine. The routing table is empty
-in this repo; MSHOPS.NET populates it as additional engines are added.
+`ghost-layer-core` is the only real engine. The dev-grade
+`scripts/serve.py` seeds four routing entries, all targeting
+`ghost-layer-core` (and `intake-agent-v2` via an extra `target_agent_id`),
+recorded as audit metadata and never dispatched; MSHOPS.NET populates the
+real table as additional engines are added.
 
 ---
 
@@ -454,7 +466,9 @@ in this repo; MSHOPS.NET populates it as additional engines are added.
 
 > **Status: design specification.** The surfaces described here are
 > operator-facing read/write access patterns defined by the API contract
-> (`API_CONTRACT.md`). No implementation exists in this repo.
+> (`API_CONTRACT.md`). The dev-grade `scripts/serve.py` implements an
+> in-memory subset (audit trail, escalation queue, operator sessions);
+> there is no production implementation in this repo.
 
 ### Audit trail (`AuditEvent`)
 
@@ -516,6 +530,8 @@ reaches `resolved` or `dismissed`.
 
 > **Status: design specification.** No health-check layer exists in this
 > repo. `HQHealthRecord` is a schema; MSHOPS.NET implements the writer.
+> (The dev-grade `scripts/serve.py` computes one on each `GET /hq/health`
+> from its in-memory state; nothing is scheduled or stored.)
 
 `HQHealthRecord` is a point-in-time snapshot of HQ-wide health. MSHOPS.NET's
 health-check layer computes and writes it on a regular schedule (recommended:
@@ -634,11 +650,13 @@ built.
   "Running things"). It is not the MSHOPS.NET backend.
 - No dynamic/plugin-loading mechanism exists or is planned for this
   repo — the registry is a hand-maintained spec, not a loader.
-- No enforcement, dispatch, throttling, or arbitration code implements
-  the HITL Governance Layer's `GOV-n`/`ROUTE-n` rules or the Escalation
-  Lifecycle's state machine — they are policy for future design work, not
-  running behavior. `EscalationEvent` is a schema, not a queue, database,
-  or event bus.
+- No dispatch, throttling, or arbitration code exists, and the engine
+  enforces none of the HITL Governance Layer's `GOV-n`/`ROUTE-n` rules —
+  they are policy for future design work. The only exception is
+  `scripts/serve.py`'s in-memory, dev-grade subset (GOV-3, GOV-7,
+  ROUTE-1, ROUTE-6 and the Escalation Lifecycle state machine; see
+  `CLAUDE.md`). `EscalationEvent` is a schema, not a queue, database, or
+  event bus.
 - This document does not describe or ratify any Ghost Layer mythology;
   see `CLAUDE.md`'s canonical-status note. No lore has been introduced
   here, including in the HITL Governance Layer and Escalation Lifecycle

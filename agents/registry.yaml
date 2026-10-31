@@ -126,8 +126,9 @@ agents:
       processed) with queue metrics for HQ observability. Routing-only:
       scripts/serve.py routes intake, register, access-request, paywall,
       and register-transition tags to it as audit metadata, but the agent
-      itself never runs. Operator-action hooks (approve, escalate, close,
-      reassign, annotate) are schema only. Status experimental: requires
+      itself never runs. Operator actions (approve, escalate, close,
+      reassign, annotate) are implemented by scripts/serve.py behind the
+      operator token. Status experimental: requires
       GOV-4 operator approval to promote to active and register with
       create_default_engine().
     produces:
