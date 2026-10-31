@@ -238,8 +238,11 @@ python3 -m pytest -q
 
 `tests/conftest.py` puts the repo root on `sys.path`, starts
 `scripts/serve.py`'s handler on an ephemeral port in a background thread,
-and clears its in-memory state before each test. There is no linter
-configuration.
+and clears its in-memory state before each test. CI
+(`.github/workflows/ci.yml`) runs the suite on Python 3.10 and 3.12, each
+with and without PyYAML (so both the `registry.yaml` path and
+`_REGISTRY_FALLBACK` are tested), behind a single `ci` check. There is no
+linter configuration.
 
 ## Conventions actually used in the code
 

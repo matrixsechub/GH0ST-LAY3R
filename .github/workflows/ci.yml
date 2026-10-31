@@ -7,19 +7,45 @@ on:
 permissions:
   contents: read
 jobs:
-  ci:
+  tests:
+    # Oldest supported Python (CLAUDE.md: 3.10+) and a current one, each with
+    # and without PyYAML: scripts/serve.py reads agents/registry.yaml when
+    # PyYAML is installed and falls back to _REGISTRY_FALLBACK otherwise.
+    name: tests (py${{ matrix.python-version }}, ${{ matrix.registry }})
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.12']
+        registry: [pyyaml, fallback]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install pytest
+          if [ "${{ matrix.registry }}" = pyyaml ]; then pip install pyyaml; fi
+      - name: Check the registry mode under test
+        run: |
+          if [ "${{ matrix.registry }}" = pyyaml ]; then
+            python -c "import yaml"
+          else
+            ! python -c "import yaml" 2>/dev/null
+          fi
       - name: Require tests
         run: test -n "$(find . -path '*/test*.py' -o -path '*/tests/*.py' | head -n 1)"
       - name: Run tests
         run: pytest --tb=short
+  ci:
+    # Single required check named "ci" that passes only if every matrix job
+    # passed, so branch protection keeps working as the matrix changes.
+    needs: tests
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - name: All test jobs passed
+        run: test "${{ needs.tests.result }}" = success
