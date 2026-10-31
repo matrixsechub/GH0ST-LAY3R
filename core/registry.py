@@ -109,7 +109,7 @@ AuditActorType = Literal["operator", "agent", "system"]
 
 # Intake Agent v2 lifecycle types (see docs/intake-agent-v2-integration-plan.md)
 # Stage machine (TTX flow): received -> validated -> queued -> processed
-#                           any open stage -> escalated (future; not implemented in this rev)
+#                           received/validated/queued -> escalated (operator escalate action in scripts/serve.py)
 IntakeLifecycleStage = Literal[
     "received",    # submission acknowledged, awaiting validation
     "validated",   # passed initial checks; cleared for queue entry

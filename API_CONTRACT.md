@@ -1,6 +1,7 @@
 # MSHOPS.NET Backend API Contract (Draft v2)
 
-> **Status: draft specification, not implemented.** This document
+> **Status: draft specification, not implemented by any production
+> service.** This document
 > describes the HTTP API a future MSHOPS.NET backend service should
 > expose. No production server code exists in this repo and none should
 > be added here — this repo defines the contract; MSHOPS.NET (a separate
@@ -108,8 +109,8 @@ Fetch a single operator entry by `operator_id`.
 
 List `EscalationEvent` records (see `AGENT_HQ.md`'s "Escalation
 Lifecycle"), optionally filtered by `status` and/or `severity` query
-params. No storage backing this exists in this repo; MSHOPS.NET owns
-persistence.
+params. MSHOPS.NET owns persistence; the dev-grade `scripts/serve.py`
+keeps escalations in an in-memory list that clears on restart.
 
 ### `GET /escalations/:id`
 

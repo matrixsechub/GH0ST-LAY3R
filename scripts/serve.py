@@ -5,28 +5,35 @@ Responsibilities:
 - Thin HTTP interface over GhostLayerEngine for local development and integration
 - Implements a subset of API_CONTRACT.md v2 endpoints called by ttx-operator-shell
 - Python stdlib only: http.server, json, uuid, datetime, threading, urllib.parse, hmac
-- In-memory state: AuditEvent, EscalationEvent, OperatorSessionRecord, AgentPool lists
+- In-memory state: AuditEvent, EscalationEvent, OperatorSessionRecord, AgentPool,
+  IntakeLifecycleRecord lists, and a seeded routing table (never dispatched)
 - No persistence — state clears on restart; persistence is MSHOPS.NET's concern
 
 Usage:
     PYTHONPATH=. python3 scripts/serve.py [--host 127.0.0.1] [--port 8000]
 
-Endpoints:
-    POST /intents                          — run engine; GOV-7 posture while an operator session is open
+Endpoints (GET filters take one value each; a repeated parameter is a 400):
+    POST /intents                          — run engine; GOV-3, GOV-7, ROUTE-1/ROUTE-6 lane records
     GET  /hq/health                        — computed HQHealthRecord (includes all intake counts)
-    GET  /audit                            — AuditEvent[] (filter: event_type, actor_id, since)
+    GET  /audit                            — AuditEvent[] (filter: actor_id, actor_type, target_id,
+                                             target_type, event_type, since, until)
+    GET  /audit/:id                        — one AuditEvent
     GET  /escalations                      — EscalationEvent[] (filter: status, severity)
     GET  /escalations/:id                  — one EscalationEvent
+    POST /escalations                      — create a pending GOV-1/2/3/5 escalation (anyone;
+                                             operator token for an intake's intent)
     PATCH /escalations/:id                 — acknowledge (anyone) / resolve, dismiss (operator token)
     GET  /operator/sessions                — OperatorSessionRecord[] (filter: operator_id, active)
     GET  /operator/sessions/:id            — one OperatorSessionRecord
     POST /operator/sessions                — open a session (operator token; one open at a time)
     PATCH /operator/sessions/:id           — close a session (operator token)
-    GET  /agents                           — agents from registry.yaml
+    GET  /agents, /agents/:id              — agents from registry.yaml
     GET  /engines                          — engines from registry.yaml
-    GET  /operators                        — operators from registry.yaml
-    GET  /agent-pools                      — in-memory AgentPool[] (empty initially)
-    GET  /agents/intake-agent-v2           — registry entry for intake-agent-v2
+    GET  /operators, /operators/:id        — operators from registry.yaml
+    GET  /agent-pools, /agent-pools/:id    — in-memory AgentPool[] (empty initially)
+    GET  /routing-table, /routing-table/:id — routing entries (filter: active, target_engine_id)
+    GET  /capabilities, /capabilities/:capability — CapabilityIndex from the registry
+                                             (filter: capability substring)
     GET  /intake-agent-v2/lifecycle        — IntakeLifecycleRecord[] (append-only, since server start)
     GET  /intake-agent-v2/metrics          — all stage counts (received/validated/queued/processed/…)
     POST /api/register                     — submit intake; creates IntakeLifecycleRecord stage=received
@@ -171,7 +178,7 @@ _REGISTRY_FALLBACK: dict = {
             "capabilities": ["lane-suggestion"],
             "description": (
                 "Always active; suggests a generic routing lane based on "
-                "tag/volatility heuristics. Advisory only."
+                "tag/volatility heuristics. Advisory only — performs no real routing."
             ),
             "produces": {"suggested_lane": "str", "confidence": "str", "basis": "dict"},
         },
@@ -191,9 +198,14 @@ _REGISTRY_FALLBACK: dict = {
                 "operator-action-hooks",
             ],
             "description": (
-                "Classifies intents into lifecycle stages and tracks queue metrics "
-                "for HQ observability. Status experimental — requires GOV-4 operator "
-                "approval to promote to active."
+                "Intake lifecycle agent (received -> validated -> queued -> "
+                "processed) with queue metrics for HQ observability. Routing-only: "
+                "scripts/serve.py routes intake, register, access-request, paywall, "
+                "and register-transition tags to it as audit metadata, but the agent "
+                "itself never runs. Operator actions (approve, escalate, close, "
+                "reassign, annotate) are implemented by scripts/serve.py behind the "
+                "operator token. Status experimental: requires GOV-4 operator approval "
+                "to promote to active and register with create_default_engine()."
             ),
             "produces": {
                 "intake_status": "str",
