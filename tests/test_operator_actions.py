@@ -616,6 +616,27 @@ def test_non_string_fields_are_rejected(hq, path, payload, field):
     assert _snapshot(hq) == before
 
 
+@pytest.mark.parametrize("tags", [
+    123,
+    True,
+    None,
+    {"critical": True},
+    ["critical", 5],
+])
+def test_intents_reject_invalid_tags_without_side_effects(hq, monkeypatch, tags):
+    def fail_if_run(*_args, **_kwargs):
+        raise AssertionError("invalid tags must be rejected before the engine runs")
+
+    before = _snapshot(hq), dict(serve._intent_lanes)
+    monkeypatch.setattr(serve._engine, "run", fail_if_run)
+
+    status, body = hq.post("/intents", {"raw": "x", "source": "t", "tags": tags})
+
+    assert status == 400
+    assert body["error"] == "'tags' must be a list of strings"
+    assert (_snapshot(hq), dict(serve._intent_lanes)) == before
+
+
 def test_oversized_body_is_rejected_unread(hq):
     status, body = _raw_post(hq, "/api/register", b"", {
         "Content-Type": "application/json",
