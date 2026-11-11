@@ -996,6 +996,12 @@ class GhostHQHandler(BaseHTTPRequestHandler):
         if not isinstance(raw, str) or not raw.strip():
             _send_error(self, 400, "'raw' must be a non-empty string")
             return
+        if (
+            not isinstance(request_tags, list)
+            or any(not isinstance(tag, str) for tag in request_tags)
+        ):
+            _send_error(self, 400, "'tags' must be a list of strings")
+            return
 
         # An intent is the operator's only with a valid token. Operator
         # presence (GOV-7) comes solely from an open OperatorSessionRecord.
